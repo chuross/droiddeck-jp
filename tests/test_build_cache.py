@@ -24,6 +24,7 @@ set -euo pipefail
 curl() {
   local url="${@: -1}" output="${@: -2:1}"
   echo "$url" >> "$CALLS"
+  printf '%s\\n' "$*" >> "$OPTIONS"
   case "$url" in
     https://www.samba.org/*) return 28 ;;
     https://download.samba.org/*) printf corrupt > "$output" ;;
@@ -35,14 +36,20 @@ fetch() {
 ''' + cache.AFTER + '''}
 fetch talloc.tar.gz https://www.samba.org/ftp/talloc/talloc-2.4.3.tar.gz "$DIGEST"
 fetch talloc.tar.gz https://www.samba.org/ftp/talloc/talloc-2.4.3.tar.gz "$DIGEST"
+fetch proot.tar.gz https://ftp.osuosl.org/proot.tar.gz "$DIGEST"
 ''')
             env = dict(os.environ, WORK=str(root / "work"),
                        DROIDDECK_BUILD_CACHE=str(root / "cache"),
-                       CALLS=str(root / "calls"), DIGEST=digest)
+                       CALLS=str(root / "calls"), OPTIONS=str(root / "options"), DIGEST=digest)
             result = subprocess.run(["bash", str(script)], env=env, capture_output=True, text=True)
             self.assertEqual(result.returncode, 0, result.stderr)
             calls = (root / "calls").read_text().splitlines()
-            self.assertEqual(len(calls), 3)
-            self.assertEqual(calls[-1], "https://ftp.osuosl.org/pub/blfs/conglomeration/talloc/talloc-2.4.3.tar.gz")
+            self.assertEqual(len(calls), 4)
+            self.assertEqual(calls[2], "https://ftp.osuosl.org/pub/blfs/conglomeration/talloc/talloc-2.4.3.tar.gz")
+            options = (root / "options").read_text().splitlines()
+            for attempt in options[:3]:
+                self.assertIn("--connect-timeout 5", attempt)
+                self.assertIn("--max-time 9", attempt)
+            self.assertIn("--max-time 7", options[3])
             self.assertEqual((root / "work/talloc.tar.gz").read_bytes(), b"verified archive")
             self.assertEqual(list((root / "cache").glob("*.tmp.*")), [])
