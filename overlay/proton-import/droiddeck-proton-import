@@ -1,0 +1,232 @@
+#!/usr/bin/python3
+"""Validate and atomically install a local ARM64 Proton; never run archive code."""
+import json
+import os
+from pathlib import Path, PurePosixPath
+import posixpath
+import re
+import runpy
+import shutil
+import sys
+import tarfile
+import tempfile
+
+PREFIX = "DDJP-"
+MARKER = ".droiddeck-jp-import.json"
+RESERVE = 256 * 1024 * 1024
+MAX_BYTES = 16 * 1024 * 1024 * 1024
+MAX_ENTRIES = 200000
+NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._+-]{0,119}\Z")
+
+
+class ImportProblem(Exception):
+    def __init__(self, code):
+        super().__init__(code)
+        self.code = code
+
+
+def fail(code):
+    raise ImportProblem(code)
+
+
+def archive_path(name):
+    path = PurePosixPath(name)
+    if not name or path.is_absolute() or ".." in path.parts or "\\" in name:
+        fail("unsafe_archive")
+    return path
+
+
+def plan(archive, free):
+    entries, seen, roots, total = [], {}, set(), 0
+    for index, member in enumerate(archive):
+        if index >= MAX_ENTRIES:
+            fail("archive_too_large")
+        path = archive_path(member.name)
+        if not path.parts and member.isdir():
+            continue
+        if not path.parts:
+            fail("unsafe_archive")
+        roots.add(path.parts[0])
+        if len(roots) != 1 or not NAME.fullmatch(path.parts[0]):
+            fail("invalid_proton")
+        key = str(path)
+        if key in seen:
+            if member.isdir() and seen[key].isdir():
+                continue
+            fail("unsafe_archive")
+        if not (member.isdir() or member.isfile() or member.issym() or member.islnk()):
+            fail("unsafe_archive")
+        if getattr(member, "sparse", None) is not None:
+            fail("unsafe_archive")
+        if member.isfile():
+            if member.size < 0:
+                fail("unsafe_archive")
+            total += member.size
+            if total > MAX_BYTES:
+                fail("archive_too_large")
+            if total + RESERVE > free:
+                fail("no_space")
+        if member.issym() or member.islnk():
+            link = member.linkname
+            if not link or link.startswith("/") or "\\" in link:
+                fail("unsafe_archive")
+            target = (posixpath.normpath(posixpath.join(str(path.parent), link))
+                      if member.issym() else str(archive_path(link)))
+            if not (target == path.parts[0] or target.startswith(path.parts[0] + "/")):
+                fail("unsafe_archive")
+        seen[key] = member
+        entries.append((member, path))
+    if not entries:
+        fail("invalid_proton")
+    # Links are created last, and cannot be parents of other archive entries.
+    for member, path in entries:
+        for parent in path.parents:
+            previous = seen.get(str(parent))
+            if previous is not None and not previous.isdir():
+                fail("unsafe_archive")
+        if member.islnk():
+            target = seen.get(str(archive_path(member.linkname)))
+            if target is None or not target.isfile():
+                fail("unsafe_archive")
+    return entries, next(iter(roots))
+
+
+def unpack(archive, entries, staging):
+    for member, path in entries:
+        destination = staging / str(path)
+        if member.isdir():
+            destination.mkdir(parents=True, exist_ok=True)
+        elif member.isfile():
+            if member.size + RESERVE > shutil.disk_usage(staging).free:
+                fail("no_space")
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            with archive.extractfile(member) as source, destination.open("xb") as output:
+                shutil.copyfileobj(source, output, 1024 * 1024)
+            if destination.stat().st_size != member.size:
+                fail("invalid_archive")
+            destination.chmod(0o644 | (member.mode & 0o111))
+    for member, path in entries:
+        destination = staging / str(path)
+        if member.issym() or member.islnk():
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            if member.issym():
+                destination.symlink_to(member.linkname)
+            else:
+                os.link(staging / str(archive_path(member.linkname)), destination)
+    # Relative links can still escape through another link (a -> ., b -> a/..).
+    # Resolve the completed link graph before any manifest or marker is written.
+    tree = staging / entries[0][1].parts[0]
+    for member, path in entries:
+        if member.issym():
+            try:
+                (staging / str(path)).resolve().relative_to(tree.resolve())
+            except (ValueError, RuntimeError, OSError):
+                fail("unsafe_archive")
+
+
+def arm64_elf(path):
+    try:
+        with path.open("rb") as binary:
+            header = binary.read(20)
+        return (len(header) == 20 and header[:6] == b"\x7fELF\x02\x01"
+                and int.from_bytes(header[18:20], "little") == 183)
+    except OSError:
+        return False
+
+
+def validate(tree):
+    for relative in (MARKER, "toolmanifest.vdf.droiddeck-orig", "toolmanifest.vdf.bannerlator-orig",
+                     "droiddeck-proton-wrap", "bannerlator-proton-wrap"):
+        if os.path.lexists(tree / relative):
+            fail("invalid_proton")
+    for relative in ("proton", "toolmanifest.vdf", "compatibilitytool.vdf"):
+        path = tree / relative
+        if path.is_symlink() or not path.is_file() or path.stat().st_size > 4 * 1024 * 1024:
+            fail("invalid_proton")
+    if not any(arm64_elf(tree / "files/bin" / name) for name in ("wine", "wine64")):
+        fail("not_arm64")
+    if not arm64_elf(tree / "files/bin/wineserver"):
+        fail("not_arm64")
+    if not (tree / "proton").stat().st_mode & 0o111:
+        fail("invalid_proton")
+
+
+def compatibility():
+    return runpy.run_path(str(Path(__file__).with_name("steam-compatibility")))
+
+
+def install(steam_root, tarball, compat=None):
+    tools = Path(steam_root) / "compatibilitytools.d"
+    tools.mkdir(parents=True, exist_ok=True)
+    if shutil.disk_usage(tools).free < RESERVE:
+        fail("no_space")
+    with tempfile.TemporaryDirectory(prefix=".ddjp-import-", dir=tools) as temporary:
+        staging = Path(temporary)
+        with tarfile.open(tarball, "r:*") as archive:
+            entries, root = plan(archive, shutil.disk_usage(tools).free)
+            directory = PREFIX + root
+            final = tools / directory
+            if os.path.lexists(final):
+                fail("already_installed")
+            unpack(archive, entries, staging)
+        tree = staging / root
+        validate(tree)
+        compat = compat or compatibility()
+        # Use only ordinary Proton entry points. An imported manifest cannot select arbitrary
+        # guest programs or feed a shell expression to the upstream launch wrapper.
+        if compat["manifest_entry_point"](str(tree / "toolmanifest.vdf")) != "proton":
+            fail("invalid_proton")
+        if compat["first_key"](str(tree / "compatibilitytool.vdf"), ["compatibilitytools", "compat_tools"]) is None:
+            fail("invalid_proton")
+        name = "ddjp-import-" + root
+        for existing in tools.iterdir():
+            if existing.name.startswith("."):
+                continue
+            key = compat["first_key"](str(existing / "compatibilitytool.vdf"), ["compatibilitytools", "compat_tools"])
+            if key == name:
+                fail("already_installed")
+        tree.rename(staging / directory)
+        tree = staging / directory
+        (tree / "compatibilitytool.vdf").write_text(compat["EXTRA_COMPAT_TOOL_VDF"] % (name, directory))
+        # Prepare the Android wrapper in the temporary directory before publishing the tool.
+        adopted = compat["adopt_extras"](str(staging))
+        if adopted.get(name) != directory:
+            fail("registration_failed")
+        (tree / MARKER).write_text(json.dumps({"directory": directory, "name": root}) + "\n")
+        if os.path.lexists(final):
+            fail("already_installed")
+        tree.rename(final)
+    return directory
+
+
+def remove(steam_root, directory):
+    if not directory.startswith(PREFIX) or not NAME.fullmatch(directory[len(PREFIX):]):
+        fail("invalid_proton")
+    tree = Path(steam_root) / "compatibilitytools.d" / directory
+    marker = tree / MARKER
+    if tree.is_symlink() or not tree.is_dir() or marker.is_symlink() or not marker.is_file():
+        fail("invalid_proton")
+    if json.loads(marker.read_text()).get("directory") != directory:
+        fail("invalid_proton")
+    shutil.rmtree(tree)
+
+
+def main(argv):
+    try:
+        if len(argv) != 3 or argv[0] not in ("install", "remove"):
+            fail("invalid_proton")
+        operation, steam_root, source = argv
+        directory = install(steam_root, source) if operation == "install" else remove(steam_root, source)
+        result = {"ok": True, "directory": directory}
+    except ImportProblem as error:
+        result = {"ok": False, "code": error.code}
+    except (tarfile.TarError, EOFError, ValueError):
+        result = {"ok": False, "code": "invalid_archive"}
+    except OSError as error:
+        result = {"ok": False, "code": "no_space" if error.errno == 28 else "io_error"}
+    print("DDJP_IMPORT " + json.dumps(result), flush=True)
+    return 0 if result["ok"] else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

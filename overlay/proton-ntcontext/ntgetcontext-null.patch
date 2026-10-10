@@ -1,0 +1,18 @@
+--- a/dlls/ntdll/signal_arm64ec.c
++++ b/dlls/ntdll/signal_arm64ec.c
+@@ -718,8 +718,13 @@
+ 
+ NTSTATUS SYSCALL_API NtGetContextThread( HANDLE handle, CONTEXT *context )
+ {
+-    ARM64_NT_CONTEXT arm_ctx = { .ContextFlags = ctx_flags_x64_to_arm( context->ContextFlags ) };
+-    NTSTATUS status = syscall_NtGetContextThread( handle, &arm_ctx );
++    ARM64_NT_CONTEXT arm_ctx = { 0 };
++    NTSTATUS status;
++
++    if (!context) return STATUS_INVALID_PARAMETER;
++
++    arm_ctx.ContextFlags = ctx_flags_x64_to_arm( context->ContextFlags );
++    status = syscall_NtGetContextThread( handle, &arm_ctx );
+ 
+     if (!status) context_arm_to_x64( (ARM64EC_NT_CONTEXT *)context, &arm_ctx );
+     return status;

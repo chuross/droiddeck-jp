@@ -1,0 +1,91 @@
+name: Build and publish ARM64 Proton NtGetContextThread fix
+
+on:
+  push:
+    branches: [main]
+    paths: ['overlay/proton-ntcontext/**', 'tests/test_proton_ntcontext.py', 'upstream.lock.json', '.github/workflows/proton.yml']
+  workflow_dispatch:
+  schedule:
+    - cron: '47 0 * * *'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: jp-proton-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 120
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.12'
+      - name: Helper and automation tests
+        run: python3 -m unittest discover -s tests -v
+      - name: Plan pinned Proton build
+        id: plan
+        run: |
+          python3 - <<'PY'
+          import json, os, subprocess, sys
+          from pathlib import Path
+          sys.path.insert(0, 'tools')
+          from release_plan import gh_json, latest_apk_release
+          pages = gh_json('repos/Droid-Deck/DroidDeck/releases?per_page=100', '--paginate', '--slurp')
+          tag = latest_apk_release([release for page in pages for release in page])['tag_name']
+          result = subprocess.run(['gh', 'release', 'view', tag, '--repo', os.environ['GITHUB_REPOSITORY'], '--json', 'assets'], capture_output=True, text=True)
+          if result.returncode and not any(x in result.stderr.lower() for x in ('not found', '404')):
+              raise RuntimeError(result.stderr)
+          asset_name = json.loads(Path('overlay/proton-ntcontext/build.lock.json').read_text())['build_name'] + '-aarch64.tar.gz'
+          assets = json.loads(result.stdout)['assets'] if result.returncode == 0 else []
+          build = not any(asset['name'] == asset_name for asset in assets) or os.environ['GITHUB_EVENT_NAME'] in ('push', 'workflow_dispatch')
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write('build=' + str(build).lower() + '\n')
+              output.write('tag=' + tag + '\n')
+          PY
+      - name: Build dependencies
+        if: steps.plan.outputs.build == 'true'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y git make rsync curl patch autoconf automake libtool nasm meson ninja-build
+          docker info
+          df -h "$GITHUB_WORKSPACE"
+      - name: Rebuild patched ARM64X ntdll and package Proton
+        if: steps.plan.outputs.build == 'true'
+        run: bash overlay/proton-ntcontext/build.sh
+      - name: Upload Proton to the APK version Release
+        if: steps.plan.outputs.build == 'true'
+        env:
+          RELEASE_TAG: ${{ steps.plan.outputs.tag }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist-proton
+          cp build/proton-ntcontext/dist/*-aarch64.tar.gz dist-proton/
+          if ! gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json isDraft > /dev/null; then
+            gh release create "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --draft --target "$GITHUB_SHA" --title "$RELEASE_TAG" --notes ""
+          fi
+          gh release upload "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" dist-proton/*-aarch64.tar.gz --clobber
+      - name: Save build logs
+        if: always() && steps.plan.outputs.build == 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: proton-build-logs
+          path: |
+            build/proton-ntcontext/results/
+            build/proton-ntcontext/wine-build/config.log
+            build/proton-ntcontext/sdk-digests.json
+          if-no-files-found: ignore
+      - name: Remove temporary build source
+        if: always()
+        run: rm -rf build/proton-ntcontext

@@ -1,0 +1,54 @@
+#!/usr/bin/python3
+"""Fixed Steam connection operations for the in-session drawer, using the existing CDP bridge."""
+
+STATE_JS = r"""
+const state = () => {
+  const app = globalThis.App, ui = globalThis.SteamUIStore;
+  if (typeof app?.BHasCurrentUser !== 'function' ||
+      typeof app?.BIsOfflineMode !== 'function' ||
+      typeof ui?.IsAnyAppRunning !== 'function')
+    return {ok: false, code: 'UNSUPPORTED_STEAM'};
+  if (!app.BHasCurrentUser()) return {ok: false, code: 'STEAM_NOT_READY'};
+  const offline = app.BIsOfflineMode();
+  if (typeof offline !== 'boolean') return {ok: false, code: 'STEAM_NOT_READY'};
+  return {ok: true, offline, running: !!ui.IsAnyAppRunning()};
+};
+"""
+
+
+def connection(agent_dir, request, evaluate, error):
+    operation = request.get("op", "status")
+    if operation not in ("status", "offline", "online"):
+        raise error("INVALID_REQUEST", "Unknown Steam connection operation")
+    action = "return state();"
+    if operation != "status":
+        desired = "true" if operation == "offline" else "false"
+        method = "GoOffline" if operation == "offline" else "GoOnline"
+        action = r"""
+const before = state();
+if (!before.ok || before.offline === DESIRED) return before;
+// Steam's own Internet settings require closing games before going offline.
+if (DESIRED && before.running) return {ok: false, code: 'GAME_RUNNING'};
+if (typeof globalThis.SteamClient?.User?.METHOD !== 'function')
+  return {ok: false, code: 'UNSUPPORTED_STEAM'};
+let failed = false;
+try {
+  Promise.resolve(SteamClient.User.METHOD()).catch(() => { failed = true; });
+} catch (_) { return {ok: false, code: 'STEAM_SWITCH_FAILED'}; }
+const deadline = Date.now() + 10000;
+while (Date.now() < deadline) {
+  const current = state();
+  if (current.ok && current.offline === DESIRED) return current;
+  if (failed) return {ok: false, code: 'STEAM_SWITCH_FAILED'};
+  await new Promise(resolve => setTimeout(resolve, 200));
+}
+return {ok: false, code: 'STEAM_SWITCH_TIMEOUT'};
+""".replace("DESIRED", desired).replace("METHOD", method)
+    expression = "(async () => {\n" + STATE_JS + action + "\n})()"
+    result = evaluate(agent_dir, expression, timeout=13).get("value")
+    if not isinstance(result, dict) or result.get("ok") is not True:
+        code = result.get("code", "INVALID_STEAM_RESPONSE") if isinstance(result, dict) else "INVALID_STEAM_RESPONSE"
+        raise error(code, "Steam connection operation failed: " + code)
+    if type(result.get("offline")) is not bool or type(result.get("running")) is not bool:
+        raise error("INVALID_STEAM_RESPONSE", "Steam did not return a connection state")
+    return {"offline": result["offline"], "running": result["running"]}

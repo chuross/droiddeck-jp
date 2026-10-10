@@ -1,0 +1,387 @@
+diff --git a/app/src/main/java/com/droiddeck/launcher/SessionActivity.kt b/app/src/main/java/com/droiddeck/launcher/SessionActivity.kt
+index 5ad2b64..93722fb 100644
+--- a/app/src/main/java/com/droiddeck/launcher/SessionActivity.kt
++++ b/app/src/main/java/com/droiddeck/launcher/SessionActivity.kt
+@@ -247,6 +247,9 @@ class SessionActivity : ComponentActivity(), SurfaceHolder.Callback {
+     private var fexPreset by mutableStateOf("")
+     private var suspendPolicy by mutableStateOf(SessionPrefs.SUSPEND_MANUAL)
+     private var steamDownloadsInBackground by mutableStateOf(false)
++    private var steamOffline by mutableStateOf<Boolean?>(null)
++    private var steamOfflineBusy by mutableStateOf(false)
++    private var steamOfflineError by mutableStateOf<String?>(null)
+     private var oscMode by mutableStateOf(SessionPrefs.OSC_AUTO)
+     private var onScreenButtonsVisible by mutableStateOf(false)
+     private var secondScreenMode by mutableStateOf(SessionState.secondScreenMode)
+@@ -494,6 +497,15 @@ class SessionActivity : ComponentActivity(), SurfaceHolder.Callback {
+                         releaseDrawerDirection()
+                     }
+                 }
++                androidx.compose.runtime.LaunchedEffect(drawerOpen, drawerPage) {
++                    if (drawerOpen && drawerPage == SessionDrawerPage.SESSION &&
++                        SessionState.mode in setOf(SessionService.MODE_STEAM, SessionService.MODE_DESKTOP)) {
++                        while (true) {
++                            if (!steamOfflineBusy) refreshSteamConnection()
++                            kotlinx.coroutines.delay(2000)
++                        }
++                    }
++                }
+                 // The PC keyboard takes it too, for moving over the keys; the drawer opens over it.
+                 androidx.compose.runtime.LaunchedEffect(pcKeyboardOpen) { if (pcKeyboardOpen) padBridge?.releaseAll() }
+                 if (pcKeyboardOpen) com.droiddeck.launcher.ui.PcKeyboard(
+@@ -514,6 +526,9 @@ class SessionActivity : ComponentActivity(), SurfaceHolder.Callback {
+                     lossless = lossless,
+                     oscMode = oscMode, onScreenButtonsVisible = onScreenButtonsVisible, suspendPolicy = suspendPolicy,
+                     steamDownloadsInBackground = steamDownloadsInBackground, touchMode = touchMode,
++                    steamConnection = SessionState.mode in setOf(SessionService.MODE_STEAM, SessionService.MODE_DESKTOP),
++                    steamOffline = steamOffline, steamOfflineBusy = steamOfflineBusy,
++                    steamOfflineError = steamOfflineError, onSteamOffline = ::changeSteamConnection,
+                     touchAuto = getString(if (usingTouchpad()) R.string.session_touch_auto_touchpad else R.string.session_touch_auto_direct),
+                     fexPreset = fexPreset,
+                     secondScreenMode = secondScreenMode,
+@@ -696,6 +711,36 @@ class SessionActivity : ComponentActivity(), SurfaceHolder.Callback {
+     }
+ 
+ 
++    private suspend fun refreshSteamConnection() {
++        val result = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
++            runCatching { com.droiddeck.launcher.session.SteamConnection.status(this@SessionActivity) }
++        }
++        if (steamOfflineBusy) return
++        result.onSuccess {
++            steamOffline = it.offline
++            steamOfflineError = null
++        }.onFailure {
++            steamOffline = null
++            steamOfflineError = getString(com.droiddeck.launcher.session.SteamConnection.message(it))
++        }
++    }
++
++    private fun changeSteamConnection(offline: Boolean) {
++        if (steamOfflineBusy) return
++        steamOfflineBusy = true
++        steamOfflineError = null
++        Thread({
++            val result = runCatching { com.droiddeck.launcher.session.SteamConnection.change(this, offline) }
++            uiHandler.post {
++                steamOfflineBusy = false
++                result.onSuccess { steamOffline = it.offline }.onFailure {
++                    steamOfflineError = getString(com.droiddeck.launcher.session.SteamConnection.message(it))
++                    android.widget.Toast.makeText(this, steamOfflineError, android.widget.Toast.LENGTH_LONG).show()
++                }
++            }
++        }, "steam-connection").start()
++    }
++
+     /** Re-reads the Protons for the drawer's Components tab, first running swaps a closed game was holding back. */
+     private fun refreshDrawerComponents() {
+         Thread({
+diff --git a/app/src/main/java/com/droiddeck/launcher/session/OfflineMode.kt b/app/src/main/java/com/droiddeck/launcher/session/OfflineMode.kt
+index 42a5a28..220a90c 100644
+--- a/app/src/main/java/com/droiddeck/launcher/session/OfflineMode.kt
++++ b/app/src/main/java/com/droiddeck/launcher/session/OfflineMode.kt
+@@ -12,8 +12,8 @@ import java.io.File
+  * all local - but only if it has credentials from an earlier successful sign-in. Two keys in
+  * loginusers.vdf decide what it does when it cannot reach a CM: WantsOfflineMode makes it go
+  * offline on its own, SkipOfflineModeWarning stops it asking first. Both are read once, while the
+- * client starts, which is why this belongs to the main screen and not to the in-session drawer:
+- * changing it during a session would write the file and change nothing until the next launch.
++ * client starts, so changing the file during a session would do nothing until the next launch.
++ * SteamConnection uses the running client's own controls instead and remembers confirmed changes.
+  *
+  * The client rewrites this file when it exits, so the request is kept as our own preference and
+  * written into the file again at every session start.
+@@ -45,10 +45,15 @@ object OfflineMode {
+     fun enabled(context: Context): Boolean = prefs(context).getBoolean(KEY, false)
+ 
+     fun setEnabled(context: Context, on: Boolean) {
+-        prefs(context).edit().putBoolean(KEY, on).apply()
++        remember(context, on)
+         apply(context, LinuxRuntime.rootDir(context))
+     }
+ 
++    /** Save a confirmed live change without racing Steam's loginusers.vdf writer. */
++    fun remember(context: Context, on: Boolean) {
++        prefs(context).edit().putBoolean(KEY, on).apply()
++    }
++
+     /**
+      * Write the request into loginusers.vdf. Every account block gets the same answer: the client
+      * signs in as one of them and we have no say in which. Keys the file does not carry are added
+diff --git a/app/src/main/java/com/droiddeck/launcher/session/SteamConnection.kt b/app/src/main/java/com/droiddeck/launcher/session/SteamConnection.kt
+new file mode 100644
+index 0000000..950a79c
+--- /dev/null
++++ b/app/src/main/java/com/droiddeck/launcher/session/SteamConnection.kt
+@@ -0,0 +1,51 @@
++package com.droiddeck.launcher.session
++
++import android.content.Context
++import com.droiddeck.launcher.R
++import com.droiddeck.launcher.agent.AgentException
++import com.droiddeck.launcher.agent.AgentGuest
++import org.json.JSONObject
++
++/** Uses Steam's own connection controls through the already running guest bridge. */
++object SteamConnection {
++    data class Snapshot(val offline: Boolean, val running: Boolean)
++
++    fun status(context: Context): Snapshot = request(context, "status")
++
++    fun change(context: Context, offline: Boolean): Snapshot {
++        val session = SessionState.sessionId
++        val result = request(context, if (offline) "offline" else "online")
++        if (!SessionState.running || SessionState.sessionId != session)
++            throw AgentException("SESSION_CHANGED", "The session changed during the request")
++        if (result.offline != offline)
++            throw AgentException("INVALID_STEAM_RESPONSE", "Steam did not confirm the requested mode")
++        // Steam owns loginusers.vdf while running; only remember confirmed changes for next boot.
++        OfflineMode.remember(context, result.offline)
++        return result
++    }
++
++    private fun request(context: Context, operation: String): Snapshot = decode(
++        AgentGuest.call(context, JSONObject().put("kind", "steam_connection").put("op", operation), 16_000),
++    )
++
++    internal fun decode(reply: JSONObject): Snapshot {
++        if (!reply.optBoolean("ok")) throw AgentException(
++            reply.optJSONObject("error")?.optString("code") ?: "STEAM_SWITCH_FAILED",
++            "Steam connection request failed",
++        )
++        val offline = reply.opt("offline") as? Boolean
++        val running = reply.opt("running") as? Boolean
++        if (offline == null || running == null)
++            throw AgentException("INVALID_STEAM_RESPONSE", "Steam did not return a connection state")
++        return Snapshot(offline, running)
++    }
++
++    fun message(error: Throwable): Int = when ((error as? AgentException)?.code) {
++        "GAME_RUNNING" -> R.string.steam_connection_game_running
++        "STEAM_SWITCH_TIMEOUT" -> R.string.steam_connection_timeout
++        "UNSUPPORTED_STEAM" -> R.string.steam_connection_unsupported
++        "STEAM_NOT_READY", "AGENT_UNAVAILABLE", "NO_ACTIVE_SESSION", "NO_TARGET", "NO_DEVTOOLS",
++        "DEVTOOLS_UNREACHABLE", "SESSION_CHANGED" -> R.string.steam_connection_not_ready
++        else -> R.string.steam_connection_failed
++    }
++}
+diff --git a/app/src/main/java/com/droiddeck/launcher/ui/SessionOverlay.kt b/app/src/main/java/com/droiddeck/launcher/ui/SessionOverlay.kt
+index 4a5d4fe..38782ba 100644
+--- a/app/src/main/java/com/droiddeck/launcher/ui/SessionOverlay.kt
++++ b/app/src/main/java/com/droiddeck/launcher/ui/SessionOverlay.kt
+@@ -193,6 +193,11 @@ class DrawerActions(
+     val onScreenButtonsVisible: Boolean,
+     val suspendPolicy: String,
+     val steamDownloadsInBackground: Boolean = false,
++    val steamConnection: Boolean = false,
++    val steamOffline: Boolean? = null,
++    val steamOfflineBusy: Boolean = false,
++    val steamOfflineError: String? = null,
++    val onSteamOffline: (Boolean) -> Unit = {},
+     val backActionsInverted: Boolean,
+     val touchMode: String,
+     val touchAuto: String,
+@@ -494,6 +499,20 @@ internal fun SessionDrawer(open: Boolean, requestedPage: SessionDrawerPage, cont
+                                     }
+                                 }
+                             }
++                            if (a.steamConnection) SettingsGroup("Steam") {
++                                ToggleRow(
++                                    host, "steam-offline", stringResource(R.string.setup_offline),
++                                    a.steamOfflineError ?: stringResource(when {
++                                        a.steamOfflineBusy -> R.string.steam_connection_switching
++                                        a.steamOffline == null -> R.string.steam_connection_not_ready
++                                        else -> R.string.steam_connection_hint
++                                    }),
++                                    a.steamOffline ?: false,
++                                    enabled = a.steamOffline != null && !a.steamOfflineBusy,
++                                    chipModifier = focus.track(page, "steam-offline"),
++                                    onChange = a.onSteamOffline,
++                                )
++                            }
+                             SettingsGroup(stringResource(R.string.drawer_session_behavior)) {
+                                 ChoiceRow(
+                                     host, "suspend", stringResource(R.string.mode_suspend),
+diff --git a/app/src/main/res/values-ja/strings.xml b/app/src/main/res/values-ja/strings.xml
+index 3d333fe..ca0380c 100644
+--- a/app/src/main/res/values-ja/strings.xml
++++ b/app/src/main/res/values-ja/strings.xml
+@@ -2064,4 +2064,11 @@
+     <string name="device_info_copied">コピーしました。</string>
+     <string name="force_ssbs_title">SSBSを強制</string>
+     <string name="force_ssbs_hint">Wineがオフにし続けるCPUの速度設定をオンに保ちます。Snapdragon 8 EliteではWindowsゲームが速くなることがあります。古いチップではほとんど変化がありません。次のゲーム起動時に反映されます。</string>
++    <string name="steam_connection_hint">Steamとセッションを再起動せずに反映します。オフラインにする前にゲームを終了してください。</string>
++    <string name="steam_connection_switching">Steamの切り替えを待っています…</string>
++    <string name="steam_connection_game_running">オフラインにする前に、起動中のゲームを終了してください。</string>
++    <string name="steam_connection_timeout">Steamの切り替えを確認できませんでした。接続を確認して再試行してください。</string>
++    <string name="steam_connection_unsupported">このSteamクライアントでは接続の切り替えに対応できません。</string>
++    <string name="steam_connection_not_ready">Steamクライアントの準備を待っています。</string>
++    <string name="steam_connection_failed">Steamの接続モードを切り替えられませんでした。</string>
+ </resources>
+diff --git a/app/src/main/res/values/strings.xml b/app/src/main/res/values/strings.xml
+index a240c5a..58382ce 100644
+--- a/app/src/main/res/values/strings.xml
++++ b/app/src/main/res/values/strings.xml
+@@ -1959,4 +1959,11 @@
+     <string name="device_info_copied">Copied.</string>
+     <string name="force_ssbs_title">Force SSBS</string>
+     <string name="force_ssbs_hint">Keeps a CPU speed setting on that Wine keeps turning off. Can make Windows games faster on Snapdragon 8 Elite; little change seen on older chips. Applies on the next game launch.</string>
++    <string name="steam_connection_hint">Applies to Steam without restarting this session. Close games before going offline.</string>
++    <string name="steam_connection_switching">Waiting for Steam to switch…</string>
++    <string name="steam_connection_game_running">Close the running game before going offline.</string>
++    <string name="steam_connection_timeout">Steam did not confirm the switch. Check your connection and try again.</string>
++    <string name="steam_connection_unsupported">This Steam client does not support the connection control.</string>
++    <string name="steam_connection_not_ready">Waiting for the Steam client to be ready.</string>
++    <string name="steam_connection_failed">Could not switch Steam connection mode.</string>
+ </resources>
+diff --git a/app/src/test/java/com/droiddeck/launcher/session/SteamConnectionTest.kt b/app/src/test/java/com/droiddeck/launcher/session/SteamConnectionTest.kt
+new file mode 100644
+index 0000000..e64bd33
+--- /dev/null
++++ b/app/src/test/java/com/droiddeck/launcher/session/SteamConnectionTest.kt
+@@ -0,0 +1,124 @@
++package com.droiddeck.launcher.session
++
++import android.content.Context
++import com.droiddeck.launcher.agent.AgentAccess
++import com.droiddeck.launcher.agent.AgentException
++import com.droiddeck.launcher.agent.AgentGuest
++import com.droiddeck.launcher.runtime.LinuxRuntime
++import org.json.JSONObject
++import org.junit.After
++import org.junit.Assert.*
++import org.junit.Before
++import org.junit.Test
++import org.junit.runner.RunWith
++import org.robolectric.RobolectricTestRunner
++import org.robolectric.RuntimeEnvironment
++import org.robolectric.annotation.Config
++import java.io.File
++import java.util.concurrent.Executors
++import java.util.concurrent.TimeUnit
++
++@RunWith(RobolectricTestRunner::class)
++@Config(sdk = [28], manifest = Config.NONE)
++class SteamConnectionTest {
++    private lateinit var context: Context
++    private lateinit var loginUsers: File
++
++    @Before fun prepare() {
++        context = RuntimeEnvironment.getApplication()
++        AgentAccess.setCommandsEnabled(context, false)
++        SessionState.running = true
++        SessionState.sessionId = "connection-test"
++        val dir = AgentGuest.dir(context)
++        dir.deleteRecursively()
++        dir.mkdirs()
++        val pid = File("/proc/self/stat").readText().substringBefore(' ').toLong()
++        File(dir, "hello.json").writeText(JSONObject().put("pid", pid).toString())
++        loginUsers = File(LinuxRuntime.rootDir(context), "root/.local/share/Steam/config/loginusers.vdf")
++        loginUsers.parentFile!!.mkdirs()
++        loginUsers.writeText("Steam owns this file while running\n")
++        OfflineMode.remember(context, false)
++    }
++
++    @After fun cleanup() {
++        SessionState.running = false
++        SessionState.sessionId = null
++        AgentGuest.dir(context).deleteRecursively()
++        loginUsers.delete()
++        OfflineMode.remember(context, false)
++    }
++
++    private fun <T> withReply(reply: JSONObject, operation: String, action: () -> T): T {
++        val executor = Executors.newSingleThreadExecutor()
++        val future = executor.submit {
++            val dir = AgentGuest.dir(context)
++            val deadline = System.currentTimeMillis() + 3000
++            var request: File? = null
++            while (request == null && System.currentTimeMillis() < deadline) {
++                request = File(dir, "req").listFiles()?.firstOrNull { it.extension == "json" }
++                if (request == null) Thread.sleep(10)
++            }
++            val file = request ?: throw AssertionError("No guest request")
++            val parsed = JSONObject(file.readText())
++            assertEquals("steam_connection", parsed.getString("kind"))
++            assertEquals(operation, parsed.getString("op"))
++            val answer = File(dir, "resp/${file.name}")
++            answer.parentFile!!.mkdirs()
++            val temp = File(dir, "resp/${file.name}.tmp")
++            temp.writeText(reply.toString())
++            assertTrue(temp.renameTo(answer))
++            file.delete()
++        }
++        try {
++            return action()
++        } finally {
++            try { future.get(4, TimeUnit.SECONDS) } finally { executor.shutdownNow() }
++        }
++    }
++
++    @Test fun confirmedChangeWorksWithoutEnablingDebugCommandsAndOnlyRemembersTheMode() {
++        val reply = JSONObject().put("ok", true).put("offline", true).put("running", false)
++        val result = withReply(reply, "offline") { SteamConnection.change(context, true) }
++        assertTrue(result.offline)
++        assertTrue(OfflineMode.enabled(context))
++        assertFalse(AgentAccess.commandsAllowed(context))
++        assertEquals("Steam owns this file while running\n", loginUsers.readText())
++    }
++
++    @Test fun failedChangeDoesNotChangeTheSavedPreference() {
++        val reply = JSONObject().put("ok", false).put("error", JSONObject().put("code", "GAME_RUNNING"))
++        withReply(reply, "offline") {
++            try {
++                SteamConnection.change(context, true)
++                fail("Should reject a refused switch")
++            } catch (error: AgentException) {
++                assertEquals("GAME_RUNNING", error.code)
++            }
++        }
++        assertFalse(OfflineMode.enabled(context))
++        assertEquals("Steam owns this file while running\n", loginUsers.readText())
++    }
++
++    @Test fun statusDoesNotOverwriteTheNextLaunchPreference() {
++        val reply = JSONObject().put("ok", true).put("offline", true).put("running", false)
++        assertTrue(withReply(reply, "status") { SteamConnection.status(context) }.offline)
++        assertFalse(OfflineMode.enabled(context))
++    }
++
++    @Test fun unconfirmedAndMalformedRepliesCannotChangePreferences() {
++        for (reply in listOf(
++            JSONObject().put("ok", true).put("offline", false).put("running", false),
++            JSONObject().put("ok", true).put("offline", "true").put("running", false),
++        )) {
++            withReply(reply, "offline") {
++                try {
++                    SteamConnection.change(context, true)
++                    fail("Should require a confirmed Boolean state")
++                } catch (error: AgentException) {
++                    assertEquals("INVALID_STEAM_RESPONSE", error.code)
++                }
++            }
++            assertFalse(OfflineMode.enabled(context))
++        }
++    }
++}
+diff --git a/tools/linuxfs/overlay/usr/local/bin/droiddeck-agent b/tools/linuxfs/overlay/usr/local/bin/droiddeck-agent
+index 972c150..a01f609 100755
+--- a/tools/linuxfs/overlay/usr/local/bin/droiddeck-agent
++++ b/tools/linuxfs/overlay/usr/local/bin/droiddeck-agent
+@@ -23,6 +23,7 @@ import json
+ import math
+ import os
+ import selectors
++import runpy
+ import signal
+ import socket
+ import struct
+@@ -613,6 +614,9 @@ def handle(agent_dir, req):
+         return run_exec(req)
+     if kind == "focus":
+         return focus_snapshot()
++    if kind == "steam_connection":
++        helper = runpy.run_path(str(Path(__file__).with_name("droiddeck-steam-connection")))
++        return helper["connection"](agent_dir, req, cdp_eval, AgentError)
+     if kind == "cdp":
+         if req.get("op") == "targets":
+             return {"targets": [{k: t.get(k) for k in ("title", "url", "type")} for t in cdp_targets(agent_dir)]}

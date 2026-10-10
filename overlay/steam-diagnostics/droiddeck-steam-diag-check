@@ -1,0 +1,51 @@
+#!/usr/bin/python3
+"""Read-only identification of the Proton tree selected at launch."""
+import hashlib
+import json
+from pathlib import Path
+import struct
+import sys
+import time
+
+
+def inspect(proton):
+    root = Path(proton).absolute()
+    if root.is_file():
+        # Proton uses dirname(argv[0]); do not resolve the entry point's symlink.
+        root = root.parent
+    dll = root / "files/lib/wine/aarch64-windows/lsteamclient.dll"
+    data = dll.read_bytes()
+    if len(data) < 64 or data[:2] != b"MZ":
+        raise ValueError("not a PE DLL: " + str(dll))
+    offset = struct.unpack_from("<I", data, 60)[0]
+    if offset + 24 > len(data) or data[offset:offset + 4] != b"PE\0\0":
+        raise ValueError("invalid PE header: " + str(dll))
+    machine = struct.unpack_from("<H", data, offset + 4)[0]
+    if not struct.unpack_from("<H", data, offset + 22)[0] & 0x2000:
+        raise ValueError("not a DLL: " + str(dll))
+    # The header identifies the file, not whether Wine actually loaded it.
+    version = root / "version"
+    wall_ms = time.time_ns() // 1000000
+    raw_us = (time.clock_gettime_ns(time.CLOCK_MONOTONIC_RAW) // 1000
+              if hasattr(time, "CLOCK_MONOTONIC_RAW") else None)
+    return {"t": wall_ms, "clock_raw_us": raw_us, "proton": str(root),
+            "version": version.read_text().strip() if version.is_file() else None,
+            "lsteamclient": str(dll), "sha256": hashlib.sha256(data).hexdigest(),
+            "pe_machine": hex(machine)}
+
+
+def main():
+    if len(sys.argv) != 2:
+        print("usage: droiddeck-steam-diag-check <Proton directory or entry point>", file=sys.stderr)
+        return 2
+    try:
+        info = inspect(sys.argv[1])
+        print("STEAMDIAG: " + json.dumps(info, ensure_ascii=True), flush=True)
+        return 0
+    except (OSError, ValueError, struct.error) as error:
+        print("STEAMDIAG: " + str(error), file=sys.stderr, flush=True)
+        return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())
