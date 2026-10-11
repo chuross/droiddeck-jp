@@ -47,7 +47,7 @@ def publish(repository, manager, plan, directory):
         "APK SHA-256: `" + digest + "`\n\n<!-- jp-source: " + hashlib.sha256(manager.encode()).hexdigest() + " -->\n", encoding="utf-8")
     # The workflow checks out an immutable source commit before building.
     target = api("repos/" + repository + "/commits/HEAD")["sha"]
-    existing = run("gh", "release", "view", tag, "--repo", repository, "--json", "isDraft,assets", check=False)
+    existing = run("gh", "release", "view", tag, "--repo", repository, "--json", "isDraft,assets,body", check=False)
     previous_assets = []
     if existing.returncode:
         if "not found" not in existing.stderr.lower() and "404" not in existing.stderr:
@@ -58,6 +58,9 @@ def publish(repository, manager, plan, directory):
     else:
         info = json.loads(existing.stdout)
         previous_assets = info.get("assets", [])
+        proton = re.search(r"(?s)<!-- proton:start -->.*?<!-- proton:end -->", info.get("body", ""))
+        if proton:
+            notes.write_text(notes.read_text().rstrip() + "\n\n" + proton.group() + "\n", encoding="utf-8")
         if not info["isDraft"]:
             # Hide the release while replacing the APK.
             run("gh", "release", "edit", tag, "--repo", repository, "--draft")

@@ -12,7 +12,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: jp-proton-${{ github.repository }}
+  group: jp-release-${{ github.repository }}
   cancel-in-progress: false
 
 jobs:
@@ -55,7 +55,7 @@ jobs:
       - name: Rebuild patched ARM64X ntdll and DXVK DXGI and package Proton
         if: steps.plan.outputs.build == 'true'
         run: bash overlay/proton-ntcontext/build.sh candidate-proton.lock.json
-      - name: Publish independent Proton Release and record tested GE version
+      - name: Attach Proton to current DroidDeck Release and record tested GE version
         if: steps.plan.outputs.build == 'true'
         run: >-
           python3 overlay/proton-ntcontext/release.py publish

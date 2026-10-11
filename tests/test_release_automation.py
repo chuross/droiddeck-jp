@@ -174,6 +174,16 @@ class PublishTest(unittest.TestCase):
         for label in ("APK versionName:", "APK versionCode:", "ビルド用ソース:", "License:"):
             self.assertNotIn(label, notes)
 
+    def test_apk_update_preserves_proton_notes_and_assets(self):
+        block = "<!-- proton:start -->\nProton notes\n<!-- proton-source: saved -->\n<!-- proton:end -->"
+        info = {"isDraft": False, "body": "Old APK\n" + block,
+                "assets": [{"name": "GE-Proton11-7-droiddeck-aarch64.tar.gz"},
+                           {"name": "Proton-SHA256SUMS"}, {"name": "proton-build.json"}]}
+        with patch.object(publisher, "run", return_value=self.result(out=json.dumps(info))) as invoke:
+            publisher.publish("owner/repo", self.manager, self.plan, self.directory)
+        self.assertIn(block, (self.directory / "release-notes.md").read_text())
+        self.assertFalse(any("delete-asset" in call.args for call in invoke.call_args_list))
+
     def test_failed_update_leaves_release_draft(self):
         with patch.object(publisher, "run", side_effect=[
                 self.result(out='{"isDraft": false}'), self.result(),

@@ -22,7 +22,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: jp-apk-${{ github.repository }}
+  group: jp-release-${{ github.repository }}
   cancel-in-progress: false
 
 jobs:

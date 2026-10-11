@@ -8,3 +8,5 @@
 - 変更後は関連テストとソース準備を検証する。既存のAPKビルド・Release運用は維持する。
 - PRは作成せず、関連検証後に変更をmainへ直接commit・pushする。
 - 説明用ドキュメントや説明用テキストファイルは新規作成しない。既存のREADME.mdとAGENTS.mdのみ必要に応じて更新する。
+
+- 生成したProtonは現在のDroidDeckリリース（例: 0.3.2）へ添付する。Proton専用のRelease・タグは作成しない。Protonは上書きし、旧Proton archiveは新しい添付の成功後に削除する。APKの添付ファイル・説明・latest指定を維持し、Protonのチェックサムは `Proton-SHA256SUMS` に分離する。
