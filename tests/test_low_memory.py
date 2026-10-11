@@ -145,6 +145,9 @@ class LowMemoryTest(unittest.TestCase):
                                         GLIBC_TUNABLES=baseline, BL_INSIDE=""),
                                         capture_output=True, text=True, check=True)
                 values = json.loads(result.stdout.splitlines()[-1])
+                state = "ON" if mode == "1" else "OFF"
+                allocation = "ON" if mode == allocator == "1" else "OFF"
+                self.assertIn("== low-memory: mode=%s allocator=%s profiler_requested=0" % (state, allocation), result.stdout)
                 if mode == allocator == "1":
                     self.assertEqual(values["GLIBC_TUNABLES"], LOW["allocator_tunables"](baseline))
                     self.assertEqual(values[LOW["BASE_GLIBC"]], baseline)

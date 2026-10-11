@@ -52,6 +52,18 @@ index 1df9babf..a4c329f1 100644
      private fun prefs(context: Context) = context.getSharedPreferences("session", Context.MODE_PRIVATE)
 
      /** Whether the launcher hides Android's status and navigation bars. */
+diff --git a/app/src/main/java/com/droiddeck/launcher/session/SessionService.kt b/app/src/main/java/com/droiddeck/launcher/session/SessionService.kt
+index 037e5a20..7e6fd224 100644
+--- a/app/src/main/java/com/droiddeck/launcher/session/SessionService.kt
++++ b/app/src/main/java/com/droiddeck/launcher/session/SessionService.kt
+@@ -636,6 +636,7 @@ class SessionService : Service() {
+         // glibc's per-thread rseq registration is refused by Android's app seccomp policy, so
+         // every thread start paid a SIGSYS that proot answers; the malloc top pad grows the heap
+         // 16 MB at a time instead of 128 KB, and every brk(2) is a proot stop too.
++        Log.i(TAG, "low-memory: requested=" + (if (SessionPrefs.lowMemoryEnabled(this)) "ON" else "OFF") + " (session startup)")
+         guest.add("GLIBC_TUNABLES=glibc.pthread.rseq=0:glibc.malloc.top_pad=16777216")
+         if (SessionState.mode == MODE_STEAM) guest.add("BL_STEAMDECK=" + (if (SessionPrefs.steamDeckMode(this)) "1" else "0"))
+         if (SessionState.mode == MODE_STEAM) guest.add("BL_MANGOAPP=" + (if (SessionPrefs.mangoapp(this)) "1" else "0"))
 diff --git a/app/src/main/java/com/droiddeck/launcher/ui/GameEnvironmentEditor.kt b/app/src/main/java/com/droiddeck/launcher/ui/GameEnvironmentEditor.kt
 index 3ca96d6c..d0053dd7 100644
 --- a/app/src/main/java/com/droiddeck/launcher/ui/GameEnvironmentEditor.kt
@@ -160,16 +172,17 @@ index e8f5605a..9a9219c1 100755
      sync = load_sync()
      launch, launch_env = select_sync(command, env, sync)
 diff --git a/tools/linuxfs/overlay/usr/local/bin/droiddeck-session b/tools/linuxfs/overlay/usr/local/bin/droiddeck-session
-index 3dbeaef1..e1f9ce97 100755
+index 3dbeaef1..bb7f49cb 100755
 --- a/tools/linuxfs/overlay/usr/local/bin/droiddeck-session
 +++ b/tools/linuxfs/overlay/usr/local/bin/droiddeck-session
-@@ -29,6 +29,44 @@ if [ -n "${BL_LOG:-}" ] && [ -z "${BL_INSIDE:-}" ]; then
+@@ -29,6 +29,58 @@ if [ -n "${BL_LOG:-}" ] && [ -z "${BL_INSIDE:-}" ]; then
    echo "== rootfs: $(cat /.version 2>/dev/null || echo unversioned)"
  fi
 
 +# Shared low-memory settings are resolved before gamescope starts MangoApp.
 +# This helper emits only fixed assignments, never values from the config file.
 +if [ -z "${BL_INSIDE:-}" ]; then
++  _bl_lm_allocator=OFF
 +  if [ -x /usr/local/bin/droiddeck-low-memory ]; then
 +    while IFS= read -r setting; do
 +      case "$setting" in
@@ -196,10 +209,23 @@ index 3dbeaef1..e1f9ce97 100755
 +    if _bl_low_glibc=$(/usr/local/bin/droiddeck-low-memory --allocator); then
 +      export GLIBC_TUNABLES="$_bl_low_glibc"
 +      export DROIDDECK_SESSION_GLIBC_LOW="$GLIBC_TUNABLES"
++      _bl_lm_allocator=ON
 +      echo "== low-memory: allocator top_pad=1MB arena_max=2 trim_threshold=128KB"
++    else
++      _bl_lm_allocator=FAILED
 +    fi
 +    unset _bl_low_glibc
 +  fi
++  case "${DROIDDECK_SESSION_LOW_MEMORY:-}" in
++    1) _bl_lm_mode=ON ;;
++    0) _bl_lm_mode=OFF ;;
++    *) _bl_lm_mode=UNKNOWN ;;
++  esac
++  echo "== low-memory: mode=$_bl_lm_mode allocator=$_bl_lm_allocator profiler_requested=${DROIDDECK_SESSION_MEMORY_PROFILER:-0}"
++  if [ "$_bl_lm_mode" = UNKNOWN ]; then
++    echo "== low-memory: mode unresolved; settings helper missing or failed"
++  fi
++  unset _bl_lm_mode _bl_lm_allocator
 +  if [ "${DROIDDECK_SESSION_MEMORY_PROFILER:-0}" = 1 ] && [ -x /usr/local/bin/droiddeck-memory-profiler ]; then
 +    /usr/local/bin/droiddeck-memory-profiler "$$" &
 +  fi
