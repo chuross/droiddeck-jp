@@ -99,6 +99,15 @@ class LaunchIntegrationTest(unittest.TestCase):
         self.assertEqual(env["DROIDDECK_LOW_MEMORY"], "0")
         self.assertNotIn("FEX_DISABLEL2CACHE", env)
 
+    def test_per_game_opt_out_restores_shared_allocator_in_both_launch_paths(self):
+        baseline = "glibc.pthread.rseq=0:glibc.malloc.top_pad=16777216"
+        lowered = LOW_MEMORY["allocator_tunables"](baseline)
+        self.env.update(DROIDDECK_LOW_MEMORY="0", GLIBC_TUNABLES=lowered,
+                        DROIDDECK_SESSION_GLIBC_BASE=baseline, DROIDDECK_SESSION_GLIBC_LOW=lowered)
+        for fallback in (False, True):
+            for _, _, env in self.run_launch(fallback):
+                self.assertEqual(env["GLIBC_TUNABLES"], baseline)
+
     def test_proton_logs_follow_each_session_and_preserve_manual_toggle(self):
         for session, flag in (("first session", "1"), ("next session", "0")):
             with self.subTest(session=session, flag=flag):

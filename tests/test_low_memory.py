@@ -3,7 +3,9 @@ import json
 import os
 from pathlib import Path
 import runpy
+import shlex
 import subprocess
+import sys
 import tempfile
 import time
 import unittest
@@ -64,11 +66,69 @@ class LowMemoryTest(unittest.TestCase):
     def test_shared_session_mode_and_profiler_can_be_controlled_independently(self):
         self.assertEqual(self.run_session({}), "")
         self.assertEqual(self.run_session({LOW["MODE"]: "1"}),
-                         "export BL_MANGOAPP=0\nexport DROIDDECK_SESSION_MEMORY_PROFILER=1\n")
-        self.assertEqual(self.run_session({LOW["MODE"]: "1", LOW["PROFILER"]: "0"}), "export BL_MANGOAPP=0\n")
+                         "export BL_MANGOAPP=0\nexport DROIDDECK_SESSION_LOW_MEMORY_ALLOCATOR=1\nexport DROIDDECK_SESSION_MEMORY_PROFILER=1\n")
+        self.assertEqual(self.run_session({LOW["MODE"]: "1", LOW["PROFILER"]: "0"}),
+                         "export BL_MANGOAPP=0\nexport DROIDDECK_SESSION_LOW_MEMORY_ALLOCATOR=1\n")
         self.assertEqual(self.run_session({LOW["PROFILER"]: "1"}), "export DROIDDECK_SESSION_MEMORY_PROFILER=1\n")
         self.assertEqual(self.run_session({LOW["MODE"]: "$(touch /tmp/no)"}), "")
         self.assertEqual(self.run_session({LOW["MODE"]: None}, {LOW["MODE"]: "1"}), "")
+
+    def test_allocator_preserves_unrelated_tunables_and_replaces_duplicates(self):
+        baseline = "glibc.pthread.rseq=0:glibc.malloc.top_pad=16777216:glibc.malloc.arena_max=8:glibc.malloc.top_pad=42:glibc.malloc.tcache_count=7"
+        expected = "glibc.pthread.rseq=0:glibc.malloc.tcache_count=7:glibc.malloc.top_pad=1048576:glibc.malloc.arena_max=2:glibc.malloc.trim_threshold=131072"
+        self.assertEqual(LOW["allocator_tunables"](baseline), expected)
+        self.assertEqual(LOW["allocator_tunables"](expected), expected)
+
+    def test_allocator_can_be_disabled_without_disabling_low_memory_mode(self):
+        baseline = "glibc.pthread.rseq=0:glibc.malloc.top_pad=16777216"
+        env = {LOW["MODE"]: "1", LOW["ALLOCATOR"]: "0", "GLIBC_TUNABLES": baseline}
+        result = LOW["game_environment"](env)
+        self.assertEqual(result["GLIBC_TUNABLES"], baseline)
+        self.assertEqual(result["MANGOHUD"], "0")
+        self.assertNotIn("LOW_MEMORY_ALLOCATOR", self.run_session({LOW["MODE"]: "1", LOW["ALLOCATOR"]: "0"}))
+
+    def test_game_opt_out_restores_session_baseline_and_respects_custom_tunables(self):
+        baseline = "glibc.pthread.rseq=0:glibc.malloc.top_pad=16777216"
+        lowered = LOW["allocator_tunables"](baseline)
+        for settings in ({LOW["MODE"]: "0"}, {LOW["MODE"]: "1", LOW["ALLOCATOR"]: "0"}):
+            env = {**settings, LOW["BASE_GLIBC"]: baseline, LOW["LOW_GLIBC"]: lowered, "GLIBC_TUNABLES": lowered}
+            self.assertEqual(LOW["game_environment"](env)["GLIBC_TUNABLES"], baseline)
+            env["GLIBC_TUNABLES"] = "glibc.malloc.top_pad=2097152"
+            self.assertEqual(LOW["game_environment"](env)["GLIBC_TUNABLES"], env["GLIBC_TUNABLES"])
+
+    def test_allocator_cli_returns_data_without_shell_evaluation(self):
+        value = "glibc.pthread.rseq=0:$(touch /tmp/allocator-should-not-execute)"
+        result = subprocess.run(["python3", str(OVERLAY / "droiddeck-low-memory"), "--allocator"],
+                                env=dict(os.environ, GLIBC_TUNABLES=value), capture_output=True, text=True, check=True)
+        self.assertEqual(result.stdout, LOW["allocator_tunables"](value))
+
+    @unittest.skipUnless(os.environ.get("DROIDDECK_JP_SOURCE"), "requires prepared session script")
+    def test_native_session_allocator_on_off_and_ab_toggle(self):
+        source = Path(os.environ["DROIDDECK_JP_SOURCE"])
+        script = (source / "tools/linuxfs/overlay/usr/local/bin/droiddeck-session").read_text()
+        hook = script.split("# Shared low-memory settings", 1)[1].split("# Until the runtime is stable", 1)[0]
+        hook = "# Shared low-memory settings" + hook
+        hook = hook.replace("/usr/local/bin/droiddeck-low-memory", str(source / "tools/linuxfs/overlay/usr/local/bin/droiddeck-low-memory"))
+        keys = ("GLIBC_TUNABLES", LOW["BASE_GLIBC"], LOW["LOW_GLIBC"])
+        child = "import json,os; print(json.dumps({k:os.environ.get(k) for k in %r}))" % (keys,)
+        code = hook + "\n" + shlex.quote(sys.executable) + " -c " + shlex.quote(child)
+        baseline = "glibc.pthread.rseq=0:glibc.malloc.top_pad=16777216:glibc.malloc.tcache_count=7"
+        with tempfile.TemporaryDirectory() as directory:
+            config = Path(directory) / ".config/droiddeck/game-environment.json"
+            config.parent.mkdir(parents=True)
+            for mode, allocator in (("1", "1"), ("0", "1"), ("1", "0")):
+                config.write_text(json.dumps({"version": 1, "shared": {
+                    LOW["MODE"]: mode, LOW["ALLOCATOR"]: allocator, LOW["PROFILER"]: "0"}}))
+                result = subprocess.run(["bash", "-c", code], env=dict(os.environ, HOME=directory,
+                                        GLIBC_TUNABLES=baseline, BL_INSIDE=""),
+                                        capture_output=True, text=True, check=True)
+                values = json.loads(result.stdout.splitlines()[-1])
+                if mode == allocator == "1":
+                    self.assertEqual(values["GLIBC_TUNABLES"], LOW["allocator_tunables"](baseline))
+                    self.assertEqual(values[LOW["BASE_GLIBC"]], baseline)
+                else:
+                    self.assertEqual(values["GLIBC_TUNABLES"], baseline)
+                    self.assertIsNone(values[LOW["BASE_GLIBC"]])
 
     def test_changed_source_fails_before_mutation(self):
         with tempfile.TemporaryDirectory() as directory:
