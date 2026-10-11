@@ -3,7 +3,7 @@ name: Build and publish ARM64 Proton NtGetContextThread fix
 on:
   push:
     branches: [main]
-    paths: ['overlay/proton-ntcontext/**', 'tests/test_proton_ntcontext.py', 'upstream.lock.json', '.github/workflows/proton.yml']
+    paths: ['overlay/proton-ntcontext/**', 'tests/test_proton_ntcontext.py', '.github/workflows/proton.yml']
   workflow_dispatch:
   schedule:
     - cron: '47 0 * * *'
@@ -34,26 +34,17 @@ jobs:
           python-version: '3.12'
       - name: Helper and automation tests
         run: python3 -m unittest discover -s tests -v
-      - name: Plan pinned Proton build
+      - name: Discover latest stable ARM64 ProtonGE release
         id: plan
-        run: |
-          python3 - <<'PY'
-          import json, os, subprocess, sys
-          from pathlib import Path
-          sys.path.insert(0, 'tools')
-          from release_plan import gh_json, latest_apk_release
-          pages = gh_json('repos/Droid-Deck/DroidDeck/releases?per_page=100', '--paginate', '--slurp')
-          tag = latest_apk_release([release for page in pages for release in page])['tag_name']
-          result = subprocess.run(['gh', 'release', 'view', tag, '--repo', os.environ['GITHUB_REPOSITORY'], '--json', 'assets'], capture_output=True, text=True)
-          if result.returncode and not any(x in result.stderr.lower() for x in ('not found', '404')):
-              raise RuntimeError(result.stderr)
-          asset_name = json.loads(Path('overlay/proton-ntcontext/build.lock.json').read_text())['build_name'] + '-aarch64.tar.gz'
-          assets = json.loads(result.stdout)['assets'] if result.returncode == 0 else []
-          build = not any(asset['name'] == asset_name for asset in assets) or os.environ['GITHUB_EVENT_NAME'] in ('push', 'workflow_dispatch')
-          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
-              output.write('build=' + str(build).lower() + '\n')
-              output.write('tag=' + tag + '\n')
-          PY
+        run: >-
+          python3 overlay/proton-ntcontext/release.py plan
+          --repository "$GITHUB_REPOSITORY" --event "$GITHUB_EVENT_NAME"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: proton-release-plan
+          path: |
+            proton-release-plan.json
+            candidate-proton.lock.json
       - name: Build dependencies
         if: steps.plan.outputs.build == 'true'
         run: |
@@ -63,19 +54,12 @@ jobs:
           df -h "$GITHUB_WORKSPACE"
       - name: Rebuild patched ARM64X ntdll and package Proton
         if: steps.plan.outputs.build == 'true'
-        run: bash overlay/proton-ntcontext/build.sh
-      - name: Upload Proton to the APK version Release
+        run: bash overlay/proton-ntcontext/build.sh candidate-proton.lock.json
+      - name: Publish independent Proton Release and record tested GE version
         if: steps.plan.outputs.build == 'true'
-        env:
-          RELEASE_TAG: ${{ steps.plan.outputs.tag }}
-        run: |
-          set -euo pipefail
-          mkdir -p dist-proton
-          cp build/proton-ntcontext/dist/*-aarch64.tar.gz dist-proton/
-          if ! gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json isDraft > /dev/null; then
-            gh release create "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --draft --target "$GITHUB_SHA" --title "$RELEASE_TAG" --notes ""
-          fi
-          gh release upload "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" dist-proton/*-aarch64.tar.gz --clobber
+        run: >-
+          python3 overlay/proton-ntcontext/release.py publish
+          --repository "$GITHUB_REPOSITORY" --manager "$GITHUB_SHA"
       - name: Save build logs
         if: always() && steps.plan.outputs.build == 'true'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

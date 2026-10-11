@@ -108,8 +108,8 @@ def write_preserving_mode(path, data):
         path.chmod(mode)
 
 
-def package(task, manager):
-    lock = json.loads((ROOT / "build.lock.json").read_text())
+def package(task, manager, lock_path=None):
+    lock = json.loads((lock_path or ROOT / "build.lock.json").read_text())
     archive = task / "base.tar.gz"
     if sha256(archive) != lock["base_sha256"]:
         raise ValueError("base GE archive checksum mismatch")
@@ -152,5 +152,6 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("task", type=Path)
     parser.add_argument("--manager", required=True)
+    parser.add_argument("--lock", type=Path)
     args = parser.parse_args()
-    package(args.task.resolve(), args.manager)
+    package(args.task.resolve(), args.manager, args.lock)

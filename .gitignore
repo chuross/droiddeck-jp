@@ -5,3 +5,5 @@ dist/
 release-plan.json
 candidate.lock.json
 dist-proton/
+proton-release-plan.json
+candidate-proton.lock.json

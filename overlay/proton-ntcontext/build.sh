@@ -4,7 +4,8 @@ manager_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 task_root="$manager_root/build/proton-ntcontext"
 test ! -e "$task_root"
 mkdir -p "$task_root"
-lock="$manager_root/overlay/proton-ntcontext/build.lock.json"
+cp "${1:-$manager_root/overlay/proton-ntcontext/build.lock.json}" "$task_root/build.lock.json"
+lock="$task_root/build.lock.json"
 read_lock() { python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))[sys.argv[2]])' "$lock" "$1"; }
 proton_commit="$(read_lock proton_commit)"
 wine_commit="$(read_lock wine_commit)"
@@ -28,10 +29,11 @@ docker run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp \
 curl -fL --retry 5 "$(read_lock base_archive)" -o "$task_root/base.tar.gz"
 printf '%s  %s\n' "$(read_lock base_sha256)" "$task_root/base.tar.gz" | sha256sum --check
 manager_commit="${GITHUB_SHA:-$(git -C "$manager_root" rev-parse HEAD)}"
-python3 "$manager_root/overlay/proton-ntcontext/package.py" "$task_root" --manager "$manager_commit"
+python3 "$manager_root/overlay/proton-ntcontext/package.py" "$task_root" --manager "$manager_commit" --lock "$lock"
 # Corresponding prepared Wine source accompanies the rebuilt GPL ntdll.
 tar --exclude=.git -cJf "$task_root/dist/$(read_lock build_name)-wine-source.tar.xz" \
     -C "$task_root/proton" wine \
-    -C "$manager_root" overlay/proton-ntcontext
+    -C "$manager_root" overlay/proton-ntcontext \
+    -C "$task_root" build.lock.json
 cd "$task_root/dist"
 sha256sum *.tar.* > SHA256SUMS

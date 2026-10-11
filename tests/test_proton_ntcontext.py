@@ -1,10 +1,14 @@
 import importlib.util
+import base64
+import hashlib
+import json
 from pathlib import Path
 import shutil
 import struct
 import subprocess
 import tempfile
 import unittest
+from unittest.mock import Mock, patch
 
 ROOT = Path(__file__).resolve().parents[1] / "overlay/proton-ntcontext"
 
@@ -19,6 +23,7 @@ def module(name):
 apply = module("apply")
 prepare = module("prepare_ge")
 package = module("package")
+release = module("release")
 ORIGINAL = '''
 NTSTATUS SYSCALL_API NtGetContextThread( HANDLE handle, CONTEXT *context )
 {
@@ -191,6 +196,182 @@ apply_patch() { patch -Np1 < "$1"; }
         self.assertEqual(result['machine'], 0xaa64)
         self.assertEqual(result['exports'], {'NtGetContextThread': 1})
         self.assertTrue(result['arm64x_metadata'])
+
+
+class GEReleaseTest(unittest.TestCase):
+    def setUp(self):
+        self.lock = json.loads((ROOT / "build.lock.json").read_text())
+        self.resolve = Mock(return_value=("a" * 40, "b" * 40, self.lock["sdk_image"]))
+        self.upstream = self.ge_release()
+
+    def ge_release(self, tag="GE-Proton11-8", **fields):
+        result = {"tag_name": tag, "published_at": "2026-10-11T00:00:00Z",
+                  "assets": [{"name": tag + "-aarch64.tar.gz", "digest": "sha256:" + "c" * 64,
+                              "browser_download_url": "https://github.com/" + release.REPOSITORY
+                              + "/releases/download/" + tag + "/" + tag + "-aarch64.tar.gz"}]}
+        result.update(fields)
+        return result
+
+    def plan(self, event="schedule", existing=None):
+        return release.make_plan(self.lock, self.upstream, event, existing, self.resolve)
+
+    def published(self, plan):
+        return {"isDraft": False, "body": plan["source_marker"],
+                "assets": [{"name": name} for name in release.asset_names(plan["lock"])]}
+
+    def test_only_stable_arm64_releases_are_selected_in_numeric_order(self):
+        selected = release.latest_arm_release([
+            self.ge_release("GE-Proton11-9"), self.ge_release("GE-Proton11-10"),
+            self.ge_release("GE-Proton11-11", assets=[]),
+            self.ge_release("GE-Proton11-12", prerelease=True),
+            self.ge_release("GE-Proton11-13", draft=True),
+            self.ge_release("GE-Proton11-14", published_at=None)])
+        self.assertEqual(selected["tag_name"], "GE-Proton11-10")
+        with self.assertRaises(RuntimeError):
+            release.latest_arm_release([self.ge_release(assets=[])])
+
+    def test_new_ge_gets_exact_commits_checksum_sdk_and_independent_tag(self):
+        plan = self.plan()
+        self.assertTrue(plan["build"])
+        self.assertEqual(plan["tag"], "GE-Proton11-8-ntcontext-fix")
+        self.assertEqual(plan["lock"]["proton_commit"], "a" * 40)
+        self.assertEqual(plan["lock"]["wine_commit"], "b" * 40)
+        self.assertEqual(plan["lock"]["base_sha256"], "c" * 64)
+        self.resolve.assert_called_once_with("GE-Proton11-8")
+        self.assertEqual(plan["original_lock"], self.lock)
+        self.assertEqual(self.lock["base_name"], "GE-Proton11-7")
+
+    def test_unchanged_complete_release_skips_and_manual_rebuilds(self):
+        plan = self.plan()
+        self.lock = plan["lock"]
+        complete = self.published(plan)
+        self.assertFalse(self.plan(existing=complete)["build"])
+        for event in ("push", "workflow_dispatch"):
+            self.assertTrue(self.plan(event, complete)["build"])
+
+    def test_failed_incomplete_or_changed_build_retries(self):
+        complete = self.published(self.plan())
+        for changed in (dict(complete, isDraft=True), dict(complete, assets=complete["assets"][:-1]),
+                        dict(complete, body="previous source"), None):
+            self.assertTrue(self.plan(existing=changed)["build"])
+
+    def test_unrecorded_candidate_retries_even_if_publication_completed(self):
+        plan = self.plan()
+        self.assertTrue(self.plan(existing=self.published(plan))["build"])
+
+    def test_lock_record_does_not_change_source_identity(self):
+        plan = self.plan()
+        with patch.object(release, "candidate_lock", return_value=plan["lock"]):
+            after = release.make_plan(plan["lock"], self.upstream, "schedule", self.published(plan))
+        self.assertFalse(after["build"])
+
+    def test_older_missing_digest_and_wrong_url_fail_without_resolving(self):
+        self.upstream = self.ge_release("GE-Proton11-6")
+        with self.assertRaisesRegex(RuntimeError, "roll back"):
+            self.plan()
+        for key, value in (("digest", None), ("digest", "sha256:invalid"),
+                           ("browser_download_url", "https://example.org/GE.tar.gz")):
+            self.upstream = self.ge_release()
+            self.upstream["assets"][0][key] = value
+            with self.assertRaises(RuntimeError):
+                self.plan()
+        self.resolve.assert_not_called()
+
+    def test_resolve_annotated_tag_uses_wine_submodule_and_arm_sdk_at_exact_commit(self):
+        makefile = ("else ifeq ($(TARGET_ARCH),arm64)\n"
+                    "\tSTEAMRT_IMAGE ?= " + self.lock["sdk_image"] + "\nendif\n")
+        responses = [{"object": {"type": "tag", "sha": "d" * 40}},
+                     {"object": {"type": "commit", "sha": "a" * 40}},
+                     {"tree": [{"path": "wine", "mode": "160000", "type": "commit", "sha": "b" * 40}]},
+                     {"content": base64.b64encode(makefile.encode()).decode()}]
+        with patch.object(release, "api", side_effect=responses) as api:
+            self.assertEqual(release.resolve_source("GE-Proton11-8"),
+                             ("a" * 40, "b" * 40, self.lock["sdk_image"]))
+        self.assertTrue(api.call_args_list[-1].args[0].endswith("?ref=" + "a" * 40))
+        with self.assertRaises(RuntimeError):
+            release.arm64_sdk(makefile.replace("arm64)", "other)"))
+        with self.assertRaises(RuntimeError):
+            release.arm64_sdk(makefile.replace("registry.gitlab.steamos.cloud", "example.org"))
+
+    def test_unexpected_wine_tree_is_rejected(self):
+        for tree in ({"tree": []}, {"truncated": True, "tree": []}):
+            with patch.object(release, "api", side_effect=[
+                    {"object": {"type": "commit", "sha": "a" * 40}}, tree]):
+                with self.assertRaisesRegex(RuntimeError, "Wine submodule"):
+                    release.resolve_source("GE-Proton11-8")
+
+    def prepare_assets(self, directory, plan):
+        for name in release.asset_names(plan["lock"]):
+            (directory / name).write_text("evidence")
+        (directory / "proton-build.json").write_text(json.dumps(
+            dict(plan["lock"], manager_commit="e" * 40)))
+        (directory / "SHA256SUMS").write_text("".join(
+            hashlib.sha256((directory / name).read_bytes()).hexdigest() + "  " + name + "\n"
+            for name in release.asset_names(plan["lock"])[:2]))
+
+    def test_publish_uploads_source_checksums_and_evidence_before_publication_without_apk_latest(self):
+        plan = self.plan()
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            self.prepare_assets(directory, plan)
+            with patch.object(release, "existing_release", return_value=None), \
+                    patch.object(release, "run") as run:
+                release.publish("owner/repo", "e" * 40, plan, directory)
+        calls = [call.args for call in run.call_args_list]
+        self.assertEqual([args[2] for args in calls], ["create", "upload", "edit"])
+        self.assertIn("GE-Proton11-8-ntcontext-fix", calls[0])
+        self.assertIn("--draft", calls[0])
+        self.assertIn("--latest=false", calls[-1])
+        self.assertTrue(any("wine-source.tar.xz" in arg for arg in calls[1]))
+        self.assertFalse(any("DroidDeck" in arg for call in calls for arg in call))
+
+    def test_wrong_provenance_or_checksums_prevent_publication(self):
+        plan = self.plan()
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            self.prepare_assets(directory, plan)
+            with patch.object(release, "run") as run:
+                with self.assertRaisesRegex(RuntimeError, "provenance"):
+                    release.publish("owner/repo", "f" * 40, plan, directory)
+                (directory / release.asset_names(plan["lock"])[0]).write_text("changed")
+                with self.assertRaisesRegex(RuntimeError, "checksum"):
+                    release.publish("owner/repo", "e" * 40, plan, directory)
+                run.assert_not_called()
+
+    def test_upload_failure_leaves_release_unpublished(self):
+        plan = self.plan()
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            self.prepare_assets(directory, plan)
+            with patch.object(release, "existing_release", return_value=None), \
+                    patch.object(release, "run", side_effect=[None, RuntimeError("upload failed")]) as run:
+                with self.assertRaisesRegex(RuntimeError, "upload failed"):
+                    release.publish("owner/repo", "e" * 40, plan, directory)
+                self.assertEqual(run.call_count, 2)
+
+    def test_publish_failure_does_not_record_candidate(self):
+        with patch.object(release, "publish", side_effect=RuntimeError("build upload failed")), \
+                patch.object(release, "record") as record, \
+                patch.object(release.argparse.ArgumentParser, "parse_args",
+                             return_value=Mock(action="publish", repository="owner/repo",
+                                               manager="e" * 40, plan=Mock(read_text=lambda: json.dumps(self.plan())),
+                                               directory=Path("/unused"))):
+            with self.assertRaises(RuntimeError):
+                release.main()
+            record.assert_not_called()
+
+    def test_success_records_candidate_with_blob_lease_and_concurrent_main_does_not(self):
+        plan = self.plan()
+        remote = {"sha": "blob", "content": base64.b64encode(json.dumps(self.lock).encode()).decode()}
+        with patch.object(release, "api", side_effect=[
+                {"object": {"sha": "e" * 40}}, remote]), patch.object(release, "run") as run:
+            self.assertTrue(release.record("owner/repo", "e" * 40, plan))
+            args = run.call_args.args
+            self.assertIn("repos/owner/repo/contents/overlay/proton-ntcontext/build.lock.json", args)
+        with patch.object(release, "api", return_value={"object": {"sha": "f" * 40}}), \
+                patch.object(release, "run") as run:
+            self.assertFalse(release.record("owner/repo", "e" * 40, plan))
+            run.assert_not_called()
 
 
 if __name__ == '__main__':
