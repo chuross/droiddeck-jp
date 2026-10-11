@@ -587,20 +587,22 @@ class GEReleaseTest(unittest.TestCase):
                     release.resolve_source("GE-Proton11-8")
 
     def prepare_assets(self, directory, plan):
-        for name in release.asset_names(plan["lock"]):
-            (directory / ("SHA256SUMS" if name == "Proton-SHA256SUMS" else name)).write_text("evidence")
+        for name in release.asset_names(plan["lock"]) + [plan["lock"]["build_name"] + "-wine-source.tar.xz"]:
+            (directory / name).write_text("evidence")
         (directory / "proton-build.json").write_text(json.dumps(
             dict(plan["lock"], manager_commit="e" * 40)))
         (directory / "SHA256SUMS").write_text("".join(
             hashlib.sha256((directory / name).read_bytes()).hexdigest() + "  " + name + "\n"
-            for name in release.asset_names(plan["lock"])[:2]))
+            for name in release.asset_names(plan["lock"]) + [plan["lock"]["build_name"] + "-wine-source.tar.xz"]))
 
     def test_publish_overwrites_proton_on_apk_release_preserving_apk_notes_and_status(self):
         plan = self.plan()
-        existing = {"isDraft": False, "body": "APK notes\n<!-- jp-source: saved -->",
+        existing = {"isDraft": False, "body": "- 本家リリース: 0.3.2\n- 本家コミット: commit\nAPK SHA-256: digest\n<!-- jp-source: " + "a" * 64 + " -->\n<!-- proton:start -->\nold description\n<!-- proton:end -->",
                     "assets": [{"name": "DroidDeck-JP.apk"}, {"name": "SHA256SUMS"},
                                {"name": "GE-Proton11-7-droiddeck-aarch64.tar.gz"},
-                               {"name": "GE-Proton11-7-droiddeck-wine-source.tar.xz"}]}
+                               {"name": "GE-Proton11-7-droiddeck-wine-source.tar.xz"},
+                               {"name": "Proton-SHA256SUMS"}, {"name": "proton-build.json"},
+                               {"name": "signal-arm64ec-disassembly.txt"}]}
         with tempfile.TemporaryDirectory() as temporary:
             directory = Path(temporary)
             self.prepare_assets(directory, plan)
@@ -608,21 +610,20 @@ class GEReleaseTest(unittest.TestCase):
             def invoke(*args, **kwargs):
                 if "--notes-file" in args:
                     notes.append(Path(args[args.index("--notes-file") + 1]).read_text())
-                if "upload" in args:
-                    checksum = next(Path(arg) for arg in args if arg.endswith("Proton-SHA256SUMS"))
-                    self.assertEqual(checksum.read_bytes(), (directory / "SHA256SUMS").read_bytes())
             with patch.object(release, "current_droiddeck_release", return_value={"tag_name": "0.3.2"}), \
                     patch.object(release, "existing_release", return_value=existing), \
                     patch.object(release, "run", side_effect=invoke) as run:
                 release.publish("owner/repo", "e" * 40, plan, directory)
         calls = [call.args for call in run.call_args_list]
-        self.assertEqual([args[2] for args in calls], ["upload", "edit", "delete-asset", "delete-asset"])
+        self.assertEqual([args[2] for args in calls], ["upload", "edit"] + ["delete-asset"] * 5)
         self.assertTrue(all("0.3.2" in args for args in calls))
         self.assertIn("--clobber", calls[0])
-        self.assertTrue(any("wine-source.tar.xz" in arg for arg in calls[0]))
+        self.assertEqual(calls[0][6:], (str(directory / "GE-Proton11-8-droiddeck-aarch64.tar.gz"), "--clobber"))
         self.assertFalse(any(arg in ("--draft", "--latest", "--title", "--draft=false") for call in calls for arg in call))
-        self.assertIn("APK notes", notes[0])
-        self.assertIn("<!-- jp-source: saved -->", notes[0])
+        self.assertIn("本家リリース: 0.3.2", notes[0])
+        self.assertIn("<!-- jp-source: " + "a" * 64 + " -->", notes[0])
+        self.assertNotIn("old description", notes[0])
+        self.assertNotIn("ProtonGE:", notes[0])
         self.assertIn(plan["source_marker"], notes[0])
         self.assertFalse(any(arg.endswith("/DroidDeck-JP.apk") or arg.endswith("/SHA256SUMS") for arg in calls[0]))
 
@@ -637,13 +638,17 @@ class GEReleaseTest(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "must not create"):
                 release.current_droiddeck_release("owner/repo")
 
-    def test_proton_notes_replace_only_proton_section(self):
-        body = "APK notes\n<!-- jp-source: saved -->\n\n<!-- proton:start -->\nold\n<!-- proton:end -->\n"
-        updated = release.proton_notes(body, "new")
-        self.assertIn("APK notes\n<!-- jp-source: saved -->", updated)
+    def test_proton_notes_keep_only_three_visible_fields_and_hidden_markers(self):
+        body = "- 本家リリース: 0.3.2\n- 本家コミット: commit\nAPK SHA-256: digest\n<!-- jp-source: " + "a" * 64 + " -->\n\n<!-- proton:start -->\nold\n<!-- proton:end -->\nextra"
+        marker = "<!-- proton-source: " + "b" * 64 + " -->"
+        updated = release.proton_notes(body, marker)
+        self.assertEqual([line for line in updated.splitlines() if line and not line.startswith("<!--")],
+                         ["- 本家リリース: 0.3.2", "- 本家コミット: commit", "APK SHA-256: digest"])
         self.assertNotIn("old", updated)
-        self.assertEqual(updated.count("<!-- proton:start -->"), 1)
-        self.assertIn("new", updated)
+        self.assertNotIn("extra", updated)
+        self.assertIn(marker, updated)
+        with self.assertRaisesRegex(RuntimeError, "three APK fields"):
+            release.proton_notes("unexpected", marker)
 
     def test_missing_or_draft_apk_release_never_creates_release(self):
         plan = self.plan()
@@ -676,7 +681,7 @@ class GEReleaseTest(unittest.TestCase):
             directory = Path(temporary)
             self.prepare_assets(directory, plan)
             with patch.object(release, "current_droiddeck_release", return_value={"tag_name": "0.3.2"}), \
-                    patch.object(release, "existing_release", return_value={"isDraft": False, "body": "APK", "assets": [{"name": "DroidDeck-JP.apk"}]}), \
+                    patch.object(release, "existing_release", return_value={"isDraft": False, "body": "- 本家リリース: 0.3.2\n- 本家コミット: commit\nAPK SHA-256: digest", "assets": [{"name": "DroidDeck-JP.apk"}]}), \
                     patch.object(release, "run", side_effect=RuntimeError("upload failed")) as run:
                 with self.assertRaisesRegex(RuntimeError, "upload failed"):
                     release.publish("owner/repo", "e" * 40, plan, directory)

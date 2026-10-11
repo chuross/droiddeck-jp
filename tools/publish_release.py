@@ -58,7 +58,7 @@ def publish(repository, manager, plan, directory):
     else:
         info = json.loads(existing.stdout)
         previous_assets = info.get("assets", [])
-        proton = re.search(r"(?s)<!-- proton:start -->.*?<!-- proton:end -->", info.get("body", ""))
+        proton = re.search(r"<!-- proton-source: [0-9a-f]{64} -->", info.get("body", ""))
         if proton:
             notes.write_text(notes.read_text().rstrip() + "\n\n" + proton.group() + "\n", encoding="utf-8")
         if not info["isDraft"]:

@@ -66,6 +66,9 @@ jobs:
         with:
           name: proton-build-logs
           path: |
+            build/proton-ntcontext/dist/*-wine-source.tar.xz
+            build/proton-ntcontext/dist/proton-build.json
+            build/proton-ntcontext/dist/SHA256SUMS
             build/proton-ntcontext/results/
             build/proton-ntcontext/wine-build/config.log
             build/proton-ntcontext/dxvk-build/meson-logs/

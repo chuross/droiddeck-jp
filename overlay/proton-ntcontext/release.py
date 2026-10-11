@@ -120,8 +120,7 @@ def source_identity(lock):
 
 def asset_names(lock):
     name = lock["build_name"]
-    return [name + "-aarch64.tar.gz", name + "-wine-source.tar.xz",
-            "Proton-SHA256SUMS", "proton-build.json", "signal-arm64ec-disassembly.txt"]
+    return [name + "-aarch64.tar.gz"]
 
 
 def existing_release(repository, tag):
@@ -153,10 +152,14 @@ def current_droiddeck_release(repository):
     return max(candidates, key=lambda item: item["published_at"])
 
 
-def proton_notes(body, notes):
-    # Keep APK notes/identity intact and replace only our delimited section.
-    body = re.sub(r"(?s)\n*<!-- proton:start -->.*?<!-- proton:end -->\n*", "", body)
-    return body.rstrip() + "\n\n<!-- proton:start -->\n" + notes.rstrip() + "\n<!-- proton:end -->\n"
+def proton_notes(body, marker):
+    # The visible release notes contain only the three APK fields.
+    fields = [line for line in body.splitlines()
+              if line.startswith(("- 本家リリース:", "- 本家コミット:", "APK SHA-256:"))]
+    if len(fields) != 3:
+        raise RuntimeError("DroidDeck release notes are missing the three APK fields")
+    apk = re.search(r"<!-- jp-source: [0-9a-f]{64} -->", body)
+    return "\n".join(fields) + "\n\n" + (apk.group() + "\n" if apk else "") + marker + "\n"
 
 
 def make_plan(lock, release, event, existing=None, resolve=resolve_source, target_tag=None):
@@ -199,15 +202,14 @@ def publish(repository, manager, plan, directory):
         raise RuntimeError("Unexpected Proton build name")
     version(lock["base_name"])
     names = asset_names(lock)
-    # The APK owns SHA256SUMS; publish the existing build checksums separately.
-    assets = [directory / ("SHA256SUMS" if name == "Proton-SHA256SUMS" else name) for name in names]
+    assets = [directory / name for name in names]
     if not all(path.is_file() and path.stat().st_size for path in assets):
         raise RuntimeError("Proton release assets are missing")
     manifest = json.loads((directory / "proton-build.json").read_text())
     if manifest.get("manager_commit") != manager or any(manifest.get(key) != value for key, value in lock.items()):
         raise RuntimeError("Proton build provenance differs from release plan")
     expected = {}
-    for path in assets[:2]:
+    for path in (assets[0], directory / (lock["build_name"] + "-wine-source.tar.xz")):
         with path.open("rb") as archive:
             expected[path.name] = hashlib.file_digest(archive, "sha256").hexdigest()
     checksums = dict((name, digest) for digest, name in
@@ -222,27 +224,17 @@ def publish(repository, manager, plan, directory):
         raise RuntimeError("DroidDeck release is unavailable; refusing to create or publish a release")
     with tempfile.TemporaryDirectory() as folder:
         notes = Path(folder) / "notes.md"
-        notes.write_text("- ProtonGE: [" + lock["base_name"] + "](https://github.com/" + REPOSITORY
-                         + "/releases/tag/" + lock["base_name"] + ")\n"
-                         + "- ARM64EC NtGetContextThread(NULL) fix\n"
-                         + "- DXVK DXGI reported memory budget cap via existing maxDeviceMemory/maxSharedMemory options\n"
-                         + "- Applies to the normal D3D12/VKD3D-Proton DXGI path; not a RAM allocation limit\n"
-                         + "- DXVK commit: " + lock["dxvk_commit"] + "\n"
-                         + "- Source commit: " + lock["proton_commit"] + "\n\n"
-                         + plan["source_marker"] + "\n")
-        notes.write_text(proton_notes(existing["body"], notes.read_text()))
-        checksum = Path(folder) / "Proton-SHA256SUMS"
-        checksum.write_bytes((directory / "SHA256SUMS").read_bytes())
-        uploads = [checksum if path.name == "SHA256SUMS" else path for path in assets]
+        notes.write_text(proton_notes(existing["body"], plan["source_marker"]))
         run("gh", "release", "upload", tag, "--repo", repository,
-            *map(str, uploads), "--clobber")
+            *map(str, assets), "--clobber")
         # Preserve the APK release's title, publication state and latest status.
         run("gh", "release", "edit", tag, "--repo", repository,
             "--notes-file", str(notes))
         # Remove only obsolete patched Proton binaries after the new assets succeed.
         for asset in existing["assets"]:
             name = asset["name"]
-            if re.fullmatch(r"GE-Proton[0-9]+-[0-9]+-(?:ntcontext-fix|droiddeck)-(?:aarch64\.tar\.gz|wine-source\.tar\.xz)", name) and name not in names:
+            if name not in names and (name in ("Proton-SHA256SUMS", "proton-build.json", "signal-arm64ec-disassembly.txt")
+                    or re.fullmatch(r"GE-Proton[0-9]+-[0-9]+-(?:ntcontext-fix|droiddeck)-(?:aarch64\.tar\.gz|wine-source\.tar\.xz)", name)):
                 run("gh", "release", "delete-asset", tag, name, "--repo", repository, "--yes")
 
 
