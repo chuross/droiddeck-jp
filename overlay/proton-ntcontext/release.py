@@ -1,4 +1,4 @@
-"""Build ARM64 GE independently and attach it to the current DroidDeck release."""
+"""Build ARM64 Valve Experimental independently and attach it to the current DroidDeck release."""
 import argparse
 import base64
 import hashlib
@@ -10,8 +10,8 @@ import subprocess
 import tempfile
 
 ROOT = Path(__file__).resolve().parent
-REPOSITORY = "GloriousEggroll/proton-ge-custom"
-TAG = re.compile(r"GE-Proton([0-9]+)-([0-9]+)\Z")
+REPOSITORY = "ValveSoftware/Proton"
+TAG = re.compile(r"Proton-Experimental-([0-9]+\.[0-9]+)-([0-9a-f]{12})\Z")
 SHA = re.compile(r"[0-9a-f]{40}\Z")
 
 
@@ -29,48 +29,29 @@ def api(endpoint, *args):
 def version(tag):
     match = TAG.fullmatch(tag)
     if not match:
-        raise RuntimeError("Unexpected GE release tag")
-    return tuple(map(int, match.groups()))
+        raise RuntimeError("Unexpected Experimental build name")
+    return match.groups()
 
 
-def latest_arm_release(releases):
-    stable = [
-        release for release in releases
-        if not release.get("draft") and not release.get("prerelease")
-        and release.get("published_at") and TAG.fullmatch(release["tag_name"])
-        and any(asset["name"] == release["tag_name"] + "-aarch64.tar.gz"
-                for asset in release.get("assets", []))
-    ]
-    if not stable:
-        raise RuntimeError("No stable GE release containing an ARM64 archive")
-    return max(stable, key=lambda release: version(release["tag_name"]))
-
-
-def resolve_source(tag):
+def resolve_source(branch):
+    if not re.fullmatch(r"experimental_[0-9]+\.[0-9]+", branch):
+        raise RuntimeError("Unexpected Experimental branch")
     endpoint = "repos/" + REPOSITORY
-    ref = api(endpoint + "/git/ref/tags/" + tag)["object"]
-    for _ in range(5):
-        if ref["type"] == "commit":
-            break
-        if ref["type"] != "tag":
-            raise RuntimeError("Unexpected GE tag object")
-        ref = api(endpoint + "/git/tags/" + ref["sha"])["object"]
+    ref = api(endpoint + "/git/ref/heads/" + branch)["object"]
     if ref["type"] != "commit" or not SHA.fullmatch(ref["sha"]):
-        raise RuntimeError("Cannot resolve exact GE release commit")
+        raise RuntimeError("Cannot resolve exact Experimental commit")
     tree = api(endpoint + "/git/trees/" + ref["sha"])
-    dxvk = [entry for entry in tree["tree"]
-            if entry["path"] == "dxvk" and entry["mode"] == "160000"
-            and entry["type"] == "commit" and SHA.fullmatch(entry["sha"])]
-    if tree.get("truncated") or len(dxvk) != 1:
-        raise RuntimeError("Cannot resolve GE DXVK submodule")
-    wine = [entry for entry in tree["tree"]
-            if entry["path"] == "wine" and entry["mode"] == "160000"
-            and entry["type"] == "commit" and SHA.fullmatch(entry["sha"])]
-    if tree.get("truncated") or len(wine) != 1:
-        raise RuntimeError("Cannot resolve GE Wine submodule")
+    commits = {}
+    for name in ("wine", "dxvk"):
+        entries = [entry for entry in tree["tree"] if entry["path"] == name
+                   and entry["mode"] == "160000" and entry["type"] == "commit"
+                   and SHA.fullmatch(entry["sha"])]
+        if tree.get("truncated") or len(entries) != 1:
+            raise RuntimeError("Cannot resolve Experimental " + name + " submodule")
+        commits[name] = entries[0]["sha"]
     makefile = api(endpoint + "/contents/Makefile.in?ref=" + ref["sha"])
     sdk = arm64_sdk(base64.b64decode(makefile["content"]).decode())
-    return ref["sha"], wine[0]["sha"], dxvk[0]["sha"], sdk
+    return ref["sha"], commits["wine"], commits["dxvk"], sdk
 
 
 def arm64_sdk(makefile):
@@ -81,30 +62,20 @@ def arm64_sdk(makefile):
     if len(images) != 1 or not re.fullmatch(
             r"registry\.gitlab\.steamos\.cloud/proton/[A-Za-z0-9._/-]+/sdk/arm64-llvm:[A-Za-z0-9._-]+",
             images[0]):
-        raise RuntimeError("GE ARM64 SDK definition changed")
+        raise RuntimeError("Proton ARM64 SDK definition changed")
     return images[0]
 
 
-def candidate_lock(lock, release, resolve=resolve_source):
-    tag = release["tag_name"]
-    if version(tag) < version(lock["base_name"]):
-        raise RuntimeError("Refusing to roll back ProtonGE")
-    archives = [asset for asset in release["assets"]
-                if asset["name"] == tag + "-aarch64.tar.gz"]
-    if len(archives) != 1:
-        raise RuntimeError("Expected exactly one ARM64 GE archive")
-    archive = archives[0]
-    url = ("https://github.com/" + REPOSITORY + "/releases/download/"
-           + tag + "/" + tag + "-aarch64.tar.gz")
-    digest = archive.get("digest") or ""
-    if archive["browser_download_url"] != url or not re.fullmatch(r"sha256:[0-9a-f]{64}", digest):
-        raise RuntimeError("Official ARM64 archive URL or SHA256 is unavailable")
-    proton, wine, dxvk, sdk = resolve(tag)
-    candidate = dict(lock, proton_repository="https://github.com/" + REPOSITORY + ".git",
-                     proton_commit=proton, wine_commit=wine, dxvk_commit=dxvk, base_archive=url,
-                     base_sha256=digest[7:], base_name=tag, build_name=tag + "-droiddeck",
-                     sdk_image=sdk)
-    return candidate
+def candidate_lock(lock, upstream=None, resolve=resolve_source):
+    branch = lock["proton_branch"]
+    proton, wine, dxvk, sdk = resolve(branch)
+    if not all(SHA.fullmatch(value) for value in (proton, wine, dxvk)):
+        raise RuntimeError("Invalid Experimental source commit")
+    name = "Proton-Experimental-" + branch.removeprefix("experimental_") + "-" + proton[:12]
+    return dict(proton_repository="https://github.com/" + REPOSITORY + ".git",
+                proton_branch=branch, proton_commit=proton, wine_commit=wine,
+                dxvk_commit=dxvk, base_name=name, build_name=name + "-droiddeck",
+                sdk_image=sdk)
 
 
 def source_identity(lock):
@@ -174,26 +145,17 @@ def make_plan(lock, release, event, existing=None, resolve=resolve_source, targe
 
 
 def plan(repository, event, output):
-    releases = []
-    page = 1
-    while True:
-        batch = api("repos/" + REPOSITORY + "/releases?per_page=100&page=" + str(page))
-        releases.extend(batch)
-        if len(batch) < 100:
-            break
-        page += 1
-    release = latest_arm_release(releases)
     lock = json.loads((ROOT / "build.lock.json").read_text())
     target = current_droiddeck_release(repository)
     existing = existing_release(repository, target["tag_name"])
-    result = make_plan(lock, release, event, existing, target_tag=target["tag_name"])
+    result = make_plan(lock, None, event, existing, target_tag=target["tag_name"])
     output.write_text(json.dumps(result, indent=2) + "\n")
     output.with_name("candidate-proton.lock.json").write_text(json.dumps(result["lock"], indent=2) + "\n")
     if os.environ.get("GITHUB_OUTPUT"):
         with open(os.environ["GITHUB_OUTPUT"], "a") as destination:
             destination.write("build=" + str(result["build"]).lower() + "\n")
             destination.write("tag=" + result["tag"] + "\n")
-    print("ProtonGE:", result["lock"]["base_name"], "| build:", result["build"])
+    print("Proton Experimental:", result["lock"]["base_name"], "| build:", result["build"])
 
 
 def publish(repository, manager, plan, directory):
@@ -234,7 +196,8 @@ def publish(repository, manager, plan, directory):
         for asset in existing["assets"]:
             name = asset["name"]
             if name not in names and (name in ("Proton-SHA256SUMS", "proton-build.json", "signal-arm64ec-disassembly.txt")
-                    or re.fullmatch(r"GE-Proton[0-9]+-[0-9]+-(?:ntcontext-fix|droiddeck)-(?:aarch64\.tar\.gz|wine-source\.tar\.xz)", name)):
+                    or re.fullmatch(r"GE-Proton[0-9]+-[0-9]+-(?:ntcontext-fix|droiddeck)-(?:aarch64\.tar\.gz|wine-source\.tar\.xz)", name)
+                    or re.fullmatch(r"Proton-Experimental-[0-9]+\.[0-9]+-[0-9a-f]{12}-droiddeck-(?:aarch64\.tar\.gz|wine-source\.tar\.xz)", name)):
                 run("gh", "release", "delete-asset", tag, name, "--repo", repository, "--yes")
 
 
@@ -249,7 +212,7 @@ def record(repository, manager, plan):
     remote = api(endpoint + "/contents/overlay/proton-ntcontext/build.lock.json?ref=main")
     if json.loads(base64.b64decode(remote["content"])) != plan["original_lock"]:
         raise RuntimeError("Proton lock changed; refusing to overwrite it")
-    payload = {"message": "Track tested ProtonGE " + plan["lock"]["base_name"],
+    payload = {"message": "Track built Proton Experimental " + plan["lock"]["base_name"],
                "branch": "main", "sha": remote["sha"],
                "content": base64.b64encode((json.dumps(plan["lock"], indent=2) + "\n").encode()).decode()}
     with tempfile.TemporaryDirectory() as folder:
@@ -283,3 +246,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

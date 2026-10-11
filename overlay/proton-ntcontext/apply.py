@@ -1,4 +1,4 @@
-"""Apply the GE Wine context fix and DXVK reported memory budget patch."""
+"""Apply the Proton Wine context fix and DXVK reported memory budget patch."""
 import argparse
 from pathlib import Path
 import subprocess
@@ -28,3 +28,4 @@ if __name__ == "__main__":
     parser.add_argument("--check", action="store_true")
     args = parser.parse_args()
     (check if args.check else apply)(args.wine_source.resolve(), args.dxvk_source.resolve())
+

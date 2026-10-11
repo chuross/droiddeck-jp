@@ -1,4 +1,4 @@
-"""Replace validated ARM64X ntdll and DXVK DXGI in a checksummed GE release."""
+"""Validate and package a full patched Valve Experimental ARM64 build."""
 import argparse
 import hashlib
 import json
@@ -95,7 +95,7 @@ def original_ntdll(tree):
     candidates = {path.resolve() for path in tree.glob("files/lib*/wine/aarch64-windows/ntdll.dll")
                   if path.is_file()}
     if len(candidates) != 1:
-        raise ValueError("expected exactly one ARM64X ntdll in the GE release")
+        raise ValueError("expected exactly one ARM64X ntdll in the Proton build")
     return candidates.pop()
 
 
@@ -115,10 +115,10 @@ def original_dxvk(tree):
     candidates = {path.resolve() for path in tree.glob("files/lib*/wine/dxvk/aarch64-windows/dxgi.dll")
                   if path.is_file()}
     if len(candidates) != 1:
-        raise ValueError("expected exactly one ARM64X DXVK DXGI in GE archive")
+        raise ValueError("expected exactly one ARM64X DXVK DXGI in Proton build")
     original = candidates.pop()
     if not original.is_relative_to(tree.resolve()):
-        raise ValueError("DXVK target is outside GE tree")
+        raise ValueError("DXVK target is outside Proton tree")
     dxvk_interface(original)
     return original
 
@@ -143,64 +143,63 @@ def write_preserving_mode(path, data):
 
 def package(task, manager, lock_path=None):
     lock = json.loads((lock_path or ROOT / "build.lock.json").read_text())
-    archive = task / "base.tar.gz"
-    if sha256(archive) != lock["base_sha256"]:
-        raise ValueError("base GE archive checksum mismatch")
+    if lock["proton_repository"] != "https://github.com/ValveSoftware/Proton.git":
+        raise ValueError("expected Valve Experimental source")
+    for name, expected in (("", lock["proton_commit"]), ("wine", lock["wine_commit"]),
+                           ("dxvk", lock["dxvk_commit"])):
+        actual = subprocess.check_output(
+            ["git", "-C", str(task / "proton" / name), "rev-parse", "HEAD"], text=True).strip()
+        if actual != expected:
+            raise ValueError("source commit differs from lock")
     check_disassembly((task / "results/signal-arm64ec-disassembly.txt").read_text())
-    unpacked = task / "unpacked"
-    unpacked.mkdir()
-    # Only this exact official release digest is extracted with tar.
-    subprocess.run(["tar", "-xzf", str(archive), "--same-permissions", "-C", str(unpacked)], check=True)
-    tree = base_tree(unpacked)
-    original = original_ntdll(tree)
-    rebuilt = task / "results/ntdll.dll"
-    before, after = pe_interface(original), pe_interface(rebuilt)
-    if before != after or after["machine"] != 0xaa64 or not after["arm64x_metadata"] or "NtGetContextThread" not in after["exports"]:
-        raise ValueError("rebuilt ARM64X ntdll does not match the original PE interface")
-    original_hash, rebuilt_hash = sha256(original), sha256(rebuilt)
-    if original_hash == rebuilt_hash:
-        raise ValueError("rebuilt ntdll is unchanged")
-    dxvk_original = original_dxvk(tree)
-    dxvk_rebuilt = rebuilt_dxvk(task / "results")
-    dxvk_before, dxvk_after = dxvk_interface(dxvk_original), dxvk_interface(dxvk_rebuilt)
-    if dxvk_before != dxvk_after:
-        raise ValueError("rebuilt DXVK DXGI PE interface differs from original")
-    original_dxvk_hash, rebuilt_dxvk_hash = sha256(dxvk_original), sha256(dxvk_rebuilt)
-    if original_dxvk_hash == rebuilt_dxvk_hash:
-        raise ValueError("rebuilt DXVK DXGI is unchanged")
-    evidence = (task / "results/dxvk/patches.diff").read_text()
-    if "options->maxDeviceMemory : options->maxSharedMemory" not in evidence:
-        raise ValueError("DXVK budget patch evidence is missing")
+    for name, patch in (("wine", "ntgetcontext-null.patch"), ("dxvk", "dxvk-memory-budget.patch")):
+        evidence = (task / ("results/" + name + "-patches.diff")).read_text()
+        if not evidence.strip():
+            raise ValueError("patch evidence is missing")
+        subprocess.run(["git", "-C", str(task / "proton" / name), "apply", "--reverse",
+                        "--check", str(ROOT / patch)], check=True)
+    tree = task / "proton-build/redist"
+    manifest = tree / "compatibilitytool.vdf"
+    if lock["build_name"] not in manifest.read_text():
+        raise ValueError("Experimental compatibility manifest changed")
+    for name in ("proton", "toolmanifest.vdf", "LICENSE"):
+        if not (tree / name).is_file():
+            raise ValueError("incomplete Proton redist: " + name)
+    ntdll = original_ntdll(tree)
+    interface = pe_interface(ntdll)
+    if interface["machine"] != 0xaa64 or not interface["arm64x_metadata"] or "NtGetContextThread" not in interface["exports"]:
+        raise ValueError("expected ARM64X ntdll")
+    dxvk = original_dxvk(tree)
     sdk_digests = json.loads((task / "sdk-digests.json").read_text())
-    name = lock["build_name"]
-    compat = tree / "compatibilitytool.vdf"
-    text = compat.read_text()
-    if lock["base_name"] not in text:
-        raise ValueError("base compatibility manifest changed")
-    # All PE, provenance and manifest checks precede replacement of either DLL.
-    write_preserving_mode(original, rebuilt.read_bytes())
-    write_preserving_mode(dxvk_original, dxvk_rebuilt.read_bytes())
-    write_preserving_mode(compat, text.replace(lock["base_name"], name).encode())
+    if not sdk_digests:
+        raise ValueError("SDK image digest is missing")
     metadata = dict(lock, manager_commit=manager, sdk_digests=sdk_digests,
-                    original_ntdll_sha256=original_hash,
-                    rebuilt_ntdll_sha256=rebuilt_hash, pe_export_count=len(after["exports"]),
                     features=["ntcontext-null-fix", "dxvk-dxgi-memory-budget-cap"],
                     patches=["ntgetcontext-null.patch", "dxvk-memory-budget.patch"],
-                    original_dxvk_dxgi_sha256=original_dxvk_hash,
-                    rebuilt_dxvk_dxgi_sha256=rebuilt_dxvk_hash,
-                    dxvk_dxgi_architecture="ARM64X", dxvk_dxgi_pe_machine=hex(dxvk_after["machine"]),
-                    dxvk_dxgi_arm64x_metadata=dxvk_after["arm64x_metadata"],
-                    dxvk_dxgi_archive_path=str(dxvk_original.relative_to(tree)),
-                    dxvk_dxgi_build_path="dxvk-build/src/dxgi/dxgi.dll",
+                    rebuilt_ntdll_sha256=sha256(ntdll),
+                    rebuilt_dxvk_dxgi_sha256=sha256(dxvk),
+                    dxvk_dxgi_architecture="ARM64X",
+                    dxvk_dxgi_archive_path=str(dxvk.relative_to(tree)),
                     fix="ARM64EC NtGetContextThread(NULL) returns STATUS_INVALID_PARAMETER")
     (tree / "droiddeck-ntcontext-build.json").write_text(json.dumps(metadata, indent=2) + "\n")
-    renamed = unpacked / name
-    tree.rename(renamed)
     dist = task / "dist"
-    dist.mkdir()
+    dist.mkdir(exist_ok=True)
     (dist / "proton-build.json").write_text(json.dumps(metadata, indent=2) + "\n")
     shutil.copy2(task / "results/signal-arm64ec-disassembly.txt", dist)
-    subprocess.run(["tar", "-czf", str(dist / (name + "-aarch64.tar.gz")), "-C", str(unpacked), name], check=True)
+    # Include exact patches, build inputs and source locations with the binary.
+    source_info = tree / "droiddeck-source"
+    source_info.mkdir()
+    for name in ("build.lock.json", "apply.py", "build.sh", "build-inside.sh",
+                 "ntgetcontext-null.patch", "dxvk-memory-budget.patch"):
+        shutil.copy2(lock_path if name == "build.lock.json" and lock_path else ROOT / name, source_info / name)
+    shutil.copy2(task / "proton/LICENSE.proton", tree / "LICENSE.proton")
+    shutil.copy2(dist / (lock["build_name"] + "-wine-source.tar.xz"), source_info / "source.tar.xz")
+    staging = task / "unpacked"
+    staging.mkdir()
+    packaged = staging / lock["build_name"]
+    shutil.copytree(tree, packaged, symlinks=True)
+    subprocess.run(["tar", "-czf", str(dist / (lock["build_name"] + "-aarch64.tar.gz")),
+                    "-C", str(staging), lock["build_name"]], check=True)
 
 
 if __name__ == "__main__":
@@ -210,3 +209,4 @@ if __name__ == "__main__":
     parser.add_argument("--lock", type=Path)
     args = parser.parse_args()
     package(args.task.resolve(), args.manager, args.lock)
+

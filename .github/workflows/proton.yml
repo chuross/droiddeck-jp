@@ -19,7 +19,7 @@ jobs:
   build:
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04-arm
-    timeout-minutes: 120
+    timeout-minutes: 360
     permissions:
       contents: write
     env:
@@ -34,7 +34,7 @@ jobs:
           python-version: '3.12'
       - name: Helper and automation tests
         run: python3 -m unittest discover -s tests -v
-      - name: Discover latest stable ARM64 ProtonGE release
+      - name: Resolve Valve Experimental ARM64 source
         id: plan
         run: >-
           python3 overlay/proton-ntcontext/release.py plan
@@ -52,10 +52,10 @@ jobs:
           sudo apt-get install -y git make rsync curl patch autoconf automake libtool nasm meson ninja-build cmake
           docker info
           df -h "$GITHUB_WORKSPACE"
-      - name: Rebuild patched ARM64X ntdll and DXVK DXGI and package Proton
+      - name: Build patched Valve Experimental ARM64 Proton
         if: steps.plan.outputs.build == 'true'
         run: bash overlay/proton-ntcontext/build.sh candidate-proton.lock.json
-      - name: Attach Proton to current DroidDeck Release and record tested GE version
+      - name: Attach Proton to current DroidDeck Release and record built Experimental commit
         if: steps.plan.outputs.build == 'true'
         run: >-
           python3 overlay/proton-ntcontext/release.py publish
@@ -70,10 +70,11 @@ jobs:
             build/proton-ntcontext/dist/proton-build.json
             build/proton-ntcontext/dist/SHA256SUMS
             build/proton-ntcontext/results/
-            build/proton-ntcontext/wine-build/config.log
-            build/proton-ntcontext/dxvk-build/meson-logs/
+            build/proton-ntcontext/proton-build/**/config.log
+            build/proton-ntcontext/proton-build/**/meson-logs/
             build/proton-ntcontext/sdk-digests.json
           if-no-files-found: ignore
       - name: Remove temporary build source
         if: always()
         run: rm -rf build/proton-ntcontext
+

@@ -1,11 +1,10 @@
 {
-  "proton_repository": "https://github.com/GloriousEggroll/proton-ge-custom.git",
-  "proton_commit": "c191f35dcebbeccfacd3b4c6f6eea026e588c1c2",
-  "wine_commit": "46b29104e3741fe23bf5e2547196a253aab88c89",
-  "base_archive": "https://github.com/GloriousEggroll/proton-ge-custom/releases/download/GE-Proton11-7/GE-Proton11-7-aarch64.tar.gz",
-  "base_sha256": "b77ac906186568c2f3c66674b85c712b145ccf73ff2718a50dd7bf6248b67ba3",
-  "base_name": "GE-Proton11-7",
-  "build_name": "GE-Proton11-7-droiddeck",
-  "sdk_image": "registry.gitlab.steamos.cloud/proton/steamrt4/sdk/arm64-llvm:4.0.20260714.251823-0",
-  "dxvk_commit": "601930949d111edbbcf9dd463948426d9f8f6ddd"
+  "proton_repository": "https://github.com/ValveSoftware/Proton.git",
+  "proton_branch": "experimental_11.0",
+  "proton_commit": "70b7e109e8fc0783a509805f3d1bc090b55dac3f",
+  "wine_commit": "6d211aabd1d325c9990a5fd7a81b9db37caae12d",
+  "dxvk_commit": "685301564ea3486a7098bd37194020da84299617",
+  "base_name": "Proton-Experimental-11.0-70b7e109e8fc",
+  "build_name": "Proton-Experimental-11.0-70b7e109e8fc-droiddeck",
+  "sdk_image": "registry.gitlab.steamos.cloud/proton/steamrt4/sdk/arm64-llvm:4.0.20260714.251823-0"
 }

@@ -83,3 +83,4 @@ int main(void)
     IDXGIFactory_Release(factory);
     return index ? 0 : 1;
 }
+

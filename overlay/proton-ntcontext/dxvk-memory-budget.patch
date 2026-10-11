@@ -22,3 +22,4 @@ index 259c782..4de00de 100644
      // We don't implement reservation, but the observable
      // behaviour should match that of Windows drivers
      uint32_t segmentId = uint32_t(MemorySegmentGroup);
+

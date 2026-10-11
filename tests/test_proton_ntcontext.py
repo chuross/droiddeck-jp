@@ -21,7 +21,6 @@ def module(name):
 
 
 apply = module("apply")
-prepare = module("prepare_ge")
 package = module("package")
 release = module("release")
 ORIGINAL = '''
@@ -306,32 +305,6 @@ class BuildEvidenceTest(unittest.TestCase):
             with self.assertRaises(ValueError):
                 package.check_disassembly(changed)
 
-    def test_preparation_keeps_ge_wine_patch_order_without_other_builds(self):
-        source = '''#!/bin/bash
-apply_patch() { patch -Np1 < "$1"; }
-### (1) PREP SECTION ###
-    pushd dxvk
-    irrelevant
-    popd
-    pushd wineopenxr
-    apply_patch "../patches/wineopenxr/a.patch"
-    popd
-### (2) WINE PATCHING ###
-    pushd wine
-    ../wine-staging/staging/patchinstall.py DESTDIR="." --all --no-autoconf
-    apply_patch "../patches/proton/a.patch"
-    autoreconf -f
-    ./tools/make_requests
-    popd
-### END WINE PATCHING ###
-'''
-        result = prepare.wine_preparation(source)
-        self.assertNotIn('irrelevant', result)
-        self.assertLess(result.index('patches/wineopenxr'), result.index('pushd wine\n'))
-        self.assertLess(result.index('patchinstall.py'), result.index('patches/proton'))
-        with self.assertRaises(RuntimeError):
-            prepare.wine_preparation(source.replace('### (2) WINE PATCHING ###', 'changed'))
-
     def test_pe_exports_and_arm64x_metadata_are_read_from_actual_headers(self):
         data = bytearray(4096)
         data[:2] = b'MZ'
@@ -379,123 +352,84 @@ def synthetic_pe(export="CreateDXGIFactory", machine=0xaa64, hybrid=True, marker
     return bytes(data) + marker
 
 
-class DXVKPackageTest(unittest.TestCase):
+class ExperimentalPackageTest(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.task = Path(self.temp.name)
-        self.tree = self.task / "base/GE-Proton11-7-aarch64"
-        self.original = self.tree / "files/lib/wine/dxvk/aarch64-windows/dxgi.dll"
-        self.original.parent.mkdir(parents=True)
-        self.original.write_bytes(synthetic_pe())
-        self.original.chmod(0o555)
-        self.ntdll = self.tree / "files/lib/wine/aarch64-windows/ntdll.dll"
-        self.ntdll.parent.mkdir(parents=True)
-        self.ntdll.write_bytes(synthetic_pe(export="NtGetContextThread"))
-        self.ntdll.chmod(0o444)
-        (self.tree / "compatibilitytool.vdf").write_text("GE-Proton11-7")
-        self.results = self.task / "results"
-        self.rebuilt = self.results / "dxvk/dxgi.dll"
-        self.rebuilt.parent.mkdir(parents=True)
-        self.rebuilt.write_bytes(synthetic_pe(marker=b"patched"))
-        (self.rebuilt.parent / "patches.diff").write_text((ROOT / "dxvk-memory-budget.patch").read_text())
-        (self.results / "ntdll.dll").write_bytes(synthetic_pe(export="NtGetContextThread", marker=b"patched"))
-        (self.results / "signal-arm64ec-disassembly.txt").write_text(
-            "0000000000000000 <#NtGetContextThread>:\n  0: cbz x1, 0x90\n  4: ldr w8, [x1, #0x30]\n")
-        (self.task / "sdk-digests.json").write_text("[]")
-        subprocess.run(["tar", "-czf", str(self.task / "base.tar.gz"), "-C", str(self.task / "base"), self.tree.name], check=True)
         self.lock = json.loads((ROOT / "build.lock.json").read_text())
-        self.lock["base_sha256"] = package.sha256(self.task / "base.tar.gz")
-        self.lock_path = self.task / "lock.json"
+        self.lock_path = self.task / "build.lock.json"
         self.lock_path.write_text(json.dumps(self.lock))
+        self.tree = self.task / "proton-build/redist"
+        self.tree.mkdir(parents=True)
+        for name in ("proton", "toolmanifest.vdf", "LICENSE"):
+            (self.tree / name).write_text("upstream")
+        (self.tree / "compatibilitytool.vdf").write_text(self.lock["build_name"])
+        for directory, name, export in (("aarch64-windows", "ntdll.dll", "NtGetContextThread"),
+                                         ("dxvk/aarch64-windows", "dxgi.dll", "CreateDXGIFactory")):
+            dll = self.tree / "files/lib/wine" / directory / name
+            dll.parent.mkdir(parents=True)
+            dll.write_bytes(synthetic_pe(export=export))
+        results = self.task / "results"
+        results.mkdir()
+        (results / "signal-arm64ec-disassembly.txt").write_text(
+            "0000000000000000 <#NtGetContextThread>:\n  0: cbz x1, 0x90\n  4: ldr w8, [x1, #0x30]\n")
+        for name in ("wine", "dxvk"):
+            (results / (name + "-patches.diff")).write_text("patch")
+        (self.task / "sdk-digests.json").write_text('["sdk@sha256:digest"]')
+        (self.task / "proton").mkdir()
+        (self.task / "proton/LICENSE.proton").write_text("Valve license")
+        (self.task / "dist").mkdir()
+        (self.task / "dist" / (self.lock["build_name"] + "-wine-source.tar.xz")).write_bytes(b"source")
+        self.heads = [self.lock[key] + "\n" for key in ("proton_commit", "wine_commit", "dxvk_commit")]
 
-    def test_package_replaces_ntdll_and_native_dxvk_and_records_hashes_modes_architecture(self):
-        before = package.sha256(self.original)
-        package.package(self.task, "manager", self.lock_path)
-        tree = self.task / "unpacked" / self.lock["build_name"]
-        dxvk = tree / self.original.relative_to(self.tree)
-        ntdll = tree / self.ntdll.relative_to(self.tree)
-        self.assertEqual(dxvk.read_bytes(), self.rebuilt.read_bytes())
-        self.assertEqual(ntdll.read_bytes(), (self.results / "ntdll.dll").read_bytes())
-        self.assertEqual(dxvk.stat().st_mode & 0o7777, 0o555)
-        self.assertEqual(ntdll.stat().st_mode & 0o7777, 0o444)
-        metadata = json.loads((self.task / "dist/proton-build.json").read_text())
-        self.assertEqual(metadata["features"], ["ntcontext-null-fix", "dxvk-dxgi-memory-budget-cap"])
-        self.assertEqual(metadata["original_dxvk_dxgi_sha256"], before)
-        self.assertEqual(metadata["rebuilt_dxvk_dxgi_sha256"], package.sha256(self.rebuilt))
-        self.assertEqual(metadata["dxvk_commit"], self.lock["dxvk_commit"])
-        self.assertEqual(metadata["dxvk_dxgi_pe_machine"], "0xaa64")
-        self.assertTrue(metadata["dxvk_dxgi_arm64x_metadata"])
-        self.assertEqual(metadata["dxvk_dxgi_archive_path"], str(self.original.relative_to(self.tree)))
-        self.assertTrue((tree / "droiddeck-ntcontext-build.json").is_file())
-        self.assertNotIn("droiddeck-dxgi-memory-budget", json.dumps(metadata))
-
-    def test_architecture_mismatch_fails_before_ntdll_replacement(self):
-        self.rebuilt.write_bytes(synthetic_pe(machine=0x8664))
-        with self.assertRaisesRegex(ValueError, "architecture mismatch"):
+    def invoke(self):
+        actual_run = subprocess.run
+        with patch.object(package.subprocess, "check_output", side_effect=self.heads), \
+                patch.object(package.subprocess, "run", wraps=subprocess.run) as run:
+            def execute(args, **kwargs):
+                if "apply" in args:
+                    return subprocess.CompletedProcess(args, 0)
+                return actual_run(args, **kwargs)
+            run.side_effect = execute
             package.package(self.task, "manager", self.lock_path)
-        original = self.task / "unpacked" / self.tree.name / self.ntdll.relative_to(self.tree)
-        self.assertEqual(original.read_bytes(), self.ntdll.read_bytes())
-        self.assertFalse((self.task / "dist").exists())
 
-    def test_pe_machine_and_hybrid_metadata_are_both_required(self):
-        for machine, hybrid in ((0xa641, True), (0x8664, True), (0xaa64, False)):
-            self.rebuilt.write_bytes(synthetic_pe(machine=machine, hybrid=hybrid))
-            with self.assertRaisesRegex(ValueError, "architecture mismatch"):
-                package.rebuilt_dxvk(self.results)
+    def test_full_build_is_packaged_with_source_and_validated_arm64x(self):
+        self.invoke()
+        packaged = self.task / "unpacked" / self.lock["build_name"]
+        metadata = json.loads((packaged / "droiddeck-ntcontext-build.json").read_text())
+        self.assertEqual(metadata["proton_commit"], self.lock["proton_commit"])
+        self.assertEqual(metadata["dxvk_dxgi_architecture"], "ARM64X")
+        self.assertTrue((packaged / "droiddeck-source/source.tar.xz").is_file())
+        self.assertEqual((packaged / "LICENSE.proton").read_text(), "Valve license")
+        self.assertTrue((self.task / "dist" / release.asset_names(self.lock)[0]).is_file())
 
-    def test_library_alias_is_deduplicated_but_distinct_candidates_fail(self):
-        (self.tree / "files/lib-arm64").symlink_to("lib", target_is_directory=True)
-        self.assertEqual(package.original_dxvk(self.tree), self.original)
-        other = self.tree / "files/lib64/wine/dxvk/aarch64-windows/dxgi.dll"
-        other.parent.mkdir(parents=True)
-        other.write_bytes(synthetic_pe())
-        with self.assertRaisesRegex(ValueError, "exactly one"):
-            package.original_dxvk(self.tree)
-
-    def test_ambiguous_rebuilt_outputs_fail(self):
-        other = self.rebuilt.parent / "other/dxgi.dll"
-        other.parent.mkdir()
-        other.write_bytes(synthetic_pe())
-        with self.assertRaisesRegex(ValueError, "ambiguous"):
-            package.rebuilt_dxvk(self.results)
-
-    def test_original_archive_checksum_is_verified_before_extraction(self):
-        self.lock["base_sha256"] = "0" * 64
-        self.lock_path.write_text(json.dumps(self.lock))
-        with self.assertRaisesRegex(ValueError, "checksum"):
-            package.package(self.task, "manager", self.lock_path)
+    def test_source_mismatch_prevents_packaging(self):
+        self.heads[1] = "0" * 40
+        with self.assertRaisesRegex(ValueError, "source commit"):
+            self.invoke()
         self.assertFalse((self.task / "unpacked").exists())
 
-    def test_unchanged_rebuilt_hash_is_rejected(self):
-        self.rebuilt.write_bytes(self.original.read_bytes())
-        with self.assertRaisesRegex(ValueError, "unchanged"):
-            package.package(self.task, "manager", self.lock_path)
+    def test_wrong_dxvk_architecture_prevents_packaging(self):
+        package.original_dxvk(self.tree).write_bytes(synthetic_pe(machine=0x8664))
+        with self.assertRaisesRegex(ValueError, "architecture mismatch"):
+            self.invoke()
+        self.assertFalse((self.task / "unpacked").exists())
 
-    def test_changed_exports_are_rejected(self):
-        self.rebuilt.write_bytes(synthetic_pe(export="CreateDXGIFactory1"))
-        with self.assertRaises(ValueError):
-            package.package(self.task, "manager", self.lock_path)
-
-    def test_patch_evidence_is_required(self):
-        (self.rebuilt.parent / "patches.diff").write_text("unpatched source")
+    def test_missing_patch_evidence_prevents_packaging(self):
+        (self.task / "results/wine-patches.diff").write_text("")
         with self.assertRaisesRegex(ValueError, "evidence"):
-            package.package(self.task, "manager", self.lock_path)
+            self.invoke()
 
 
-class GEReleaseTest(unittest.TestCase):
+class ExperimentalReleaseTest(unittest.TestCase):
     def setUp(self):
         self.lock = json.loads((ROOT / "build.lock.json").read_text())
         self.resolve = Mock(return_value=("a" * 40, "b" * 40, "d" * 40, self.lock["sdk_image"]))
         self.upstream = self.ge_release()
 
-    def ge_release(self, tag="GE-Proton11-8", **fields):
-        result = {"tag_name": tag, "published_at": "2026-10-11T00:00:00Z",
-                  "assets": [{"name": tag + "-aarch64.tar.gz", "digest": "sha256:" + "c" * 64,
-                              "browser_download_url": "https://github.com/" + release.REPOSITORY
-                              + "/releases/download/" + tag + "/" + tag + "-aarch64.tar.gz"}]}
-        result.update(fields)
-        return result
+    def ge_release(self):
+        return None
 
     def plan(self, event="schedule", existing=None):
         return release.make_plan(self.lock, self.upstream, event, existing, self.resolve, target_tag="0.3.2")
@@ -504,28 +438,15 @@ class GEReleaseTest(unittest.TestCase):
         return {"isDraft": False, "body": plan["source_marker"],
                 "assets": [{"name": name} for name in release.asset_names(plan["lock"])]}
 
-    def test_only_stable_arm64_releases_are_selected_in_numeric_order(self):
-        selected = release.latest_arm_release([
-            self.ge_release("GE-Proton11-9"), self.ge_release("GE-Proton11-10"),
-            self.ge_release("GE-Proton11-11", assets=[]),
-            self.ge_release("GE-Proton11-12", prerelease=True),
-            self.ge_release("GE-Proton11-13", draft=True),
-            self.ge_release("GE-Proton11-14", published_at=None)])
-        self.assertEqual(selected["tag_name"], "GE-Proton11-10")
-        with self.assertRaises(RuntimeError):
-            release.latest_arm_release([self.ge_release(assets=[])])
-
-    def test_new_ge_gets_exact_commits_checksum_sdk_and_droiddeck_tag(self):
+    def test_experimental_branch_resolves_exact_source_and_removes_ge_archive(self):
         plan = self.plan()
         self.assertTrue(plan["build"])
         self.assertEqual(plan["tag"], "0.3.2")
         self.assertEqual(plan["lock"]["proton_commit"], "a" * 40)
         self.assertEqual(plan["lock"]["wine_commit"], "b" * 40)
         self.assertEqual(plan["lock"]["dxvk_commit"], "d" * 40)
-        self.assertEqual(plan["lock"]["base_sha256"], "c" * 64)
-        self.resolve.assert_called_once_with("GE-Proton11-8")
-        self.assertEqual(plan["original_lock"], self.lock)
-        self.assertEqual(self.lock["base_name"], "GE-Proton11-7")
+        self.assertNotIn("base_archive", plan["lock"])
+        self.resolve.assert_called_once_with("experimental_11.0")
 
     def test_unchanged_complete_release_skips_and_manual_rebuilds(self):
         plan = self.plan()
@@ -551,27 +472,19 @@ class GEReleaseTest(unittest.TestCase):
             after = release.make_plan(plan["lock"], self.upstream, "schedule", self.published(plan))
         self.assertFalse(after["build"])
 
-    def test_older_missing_digest_and_wrong_url_fail_without_resolving(self):
-        self.upstream = self.ge_release("GE-Proton11-6")
-        with self.assertRaisesRegex(RuntimeError, "roll back"):
+    def test_invalid_commit_rejected(self):
+        self.resolve.return_value = ("invalid", "b" * 40, "d" * 40, self.lock["sdk_image"])
+        with self.assertRaisesRegex(RuntimeError, "commit"):
             self.plan()
-        for key, value in (("digest", None), ("digest", "sha256:invalid"),
-                           ("browser_download_url", "https://example.org/GE.tar.gz")):
-            self.upstream = self.ge_release()
-            self.upstream["assets"][0][key] = value
-            with self.assertRaises(RuntimeError):
-                self.plan()
-        self.resolve.assert_not_called()
 
-    def test_resolve_annotated_tag_uses_wine_submodule_and_arm_sdk_at_exact_commit(self):
+    def test_resolve_branch_uses_wine_submodule_and_arm_sdk_at_exact_commit(self):
         makefile = ("else ifeq ($(TARGET_ARCH),arm64)\n"
                     "\tSTEAMRT_IMAGE ?= " + self.lock["sdk_image"] + "\nendif\n")
-        responses = [{"object": {"type": "tag", "sha": "d" * 40}},
-                     {"object": {"type": "commit", "sha": "a" * 40}},
+        responses = [{"object": {"type": "commit", "sha": "a" * 40}},
                      {"tree": [{"path": "wine", "mode": "160000", "type": "commit", "sha": "b" * 40}, {"path": "dxvk", "mode": "160000", "type": "commit", "sha": "d" * 40}]},
                      {"content": base64.b64encode(makefile.encode()).decode()}]
         with patch.object(release, "api", side_effect=responses) as api:
-            self.assertEqual(release.resolve_source("GE-Proton11-8"),
+            self.assertEqual(release.resolve_source("experimental_11.0"),
                              ("a" * 40, "b" * 40, "d" * 40, self.lock["sdk_image"]))
         self.assertTrue(api.call_args_list[-1].args[0].endswith("?ref=" + "a" * 40))
         with self.assertRaises(RuntimeError):
@@ -584,7 +497,7 @@ class GEReleaseTest(unittest.TestCase):
             with patch.object(release, "api", side_effect=[
                     {"object": {"type": "commit", "sha": "a" * 40}}, tree]):
                 with self.assertRaisesRegex(RuntimeError, "submodule"):
-                    release.resolve_source("GE-Proton11-8")
+                    release.resolve_source("experimental_11.0")
 
     def prepare_assets(self, directory, plan):
         for name in release.asset_names(plan["lock"]) + [plan["lock"]["build_name"] + "-wine-source.tar.xz"]:
@@ -618,7 +531,7 @@ class GEReleaseTest(unittest.TestCase):
         self.assertEqual([args[2] for args in calls], ["upload", "edit"] + ["delete-asset"] * 5)
         self.assertTrue(all("0.3.2" in args for args in calls))
         self.assertIn("--clobber", calls[0])
-        self.assertEqual(calls[0][6:], (str(directory / "GE-Proton11-8-droiddeck-aarch64.tar.gz"), "--clobber"))
+        self.assertEqual(calls[0][6:], (str(directory / release.asset_names(plan["lock"])[0]), "--clobber"))
         self.assertFalse(any(arg in ("--draft", "--latest", "--title", "--draft=false") for call in calls for arg in call))
         self.assertIn("本家リリース: 0.3.2", notes[0])
         self.assertIn("<!-- jp-source: " + "a" * 64 + " -->", notes[0])
@@ -714,3 +627,4 @@ class GEReleaseTest(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
