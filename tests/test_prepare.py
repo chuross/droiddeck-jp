@@ -14,7 +14,6 @@ spec = importlib.util.spec_from_file_location("prepare", ROOT / "tools/prepare.p
 builder = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(builder)
 fonts = builder.PATCHES["japanese-fonts"]
-offline = builder.PATCHES["offline-mode"]
 logs = builder.PATCHES["proton-logs"]
 imports = builder.PATCHES["proton-import"]
 
@@ -147,7 +146,7 @@ class PrepareTest(unittest.TestCase):
         proot = self.source / "tools/proot/build.sh"
         proot.parent.mkdir(parents=True)
         proot.write_text(builder.PATCHES["build-cache"].BEFORE)
-        with patch.object(fonts, "bundle_fonts"), patch.object(offline, "check"), patch.object(offline, "apply"), \
+        with patch.object(fonts, "bundle_fonts"), \
              patch.object(imports, "check"), patch.object(imports, "apply"):
             builder.overlay(self.source)
         for name, text in preserved.items():
@@ -169,15 +168,19 @@ class PrepareTest(unittest.TestCase):
             logs.patch_proton_logs(self.source)
         self.assertEqual(script.read_text(), text)
 
-    def test_changed_steam_controls_stop_before_installing_assets(self):
+    def test_changed_diagnostics_launch_hook_stops_before_installing_assets(self):
+        script = self.source / "tools/linuxfs/overlay/usr/local/bin/droiddeck-game-env"
+        script.parent.mkdir(parents=True)
+        script.write_text("def main():\n    upstream_launch_changed()\n")
         with patch.object(fonts, "bundle_fonts") as bundled:
-            with self.assertRaisesRegex(RuntimeError, "Steam connection integration changed"):
+            with self.assertRaisesRegex(RuntimeError, "Steam diagnostics launch hook changed"):
                 builder.overlay(self.source)
         bundled.assert_not_called()
-        self.assertFalse((self.source / "tools/linuxfs/overlay").exists())
+        self.assertFalse((script.parent / "droiddeck-jp-fonts").exists())
 
 
 if __name__ == "__main__":
     unittest.main()
+
 
 
