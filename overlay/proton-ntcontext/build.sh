@@ -12,6 +12,13 @@ git -C "$task_root/proton" fetch --depth=1 origin "$(read_lock proton_commit)"
 git -C "$task_root/proton" checkout --detach FETCH_HEAD
 test "$(git -C "$task_root/proton" rev-parse HEAD)" = "$(read_lock proton_commit)"
 git -C "$task_root/proton" submodule update --init --recursive --depth=1
+# FEX's upstream build uses git describe without --always and needs tagged ancestry.
+if test "$(git -C "$task_root/proton/FEX" rev-parse --is-shallow-repository)" = true; then
+    git -C "$task_root/proton/FEX" fetch --unshallow --tags origin
+else
+    git -C "$task_root/proton/FEX" fetch --tags origin
+fi
+git -C "$task_root/proton/FEX" describe --abbrev=7
 test "$(git -C "$task_root/proton/wine" rev-parse HEAD)" = "$(read_lock wine_commit)"
 test "$(git -C "$task_root/proton/dxvk" rev-parse HEAD)" = "$(read_lock dxvk_commit)"
 python3 "$manager_root/overlay/proton-ntcontext/apply.py" --wine-source "$task_root/proton/wine" --dxvk-source "$task_root/proton/dxvk"
