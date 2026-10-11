@@ -108,6 +108,17 @@ class LaunchIntegrationTest(unittest.TestCase):
             for _, _, env in self.run_launch(fallback):
                 self.assertEqual(env["GLIBC_TUNABLES"], baseline)
 
+    def test_global_session_mode_wins_over_legacy_game_profiles_in_both_launch_paths(self):
+        for fallback in (False, True):
+            self.env.update(DROIDDECK_SESSION_LOW_MEMORY="1", DROIDDECK_LOW_MEMORY="0")
+            for _, _, env in self.run_launch(fallback):
+                self.assertEqual(env["FEX_DISABLEL2CACHE"], "1")
+                self.assertEqual(env["DXVK_HUD"], "0")
+            self.env.update(DROIDDECK_SESSION_LOW_MEMORY="0", DROIDDECK_LOW_MEMORY="1")
+            for _, _, env in self.run_launch(fallback):
+                self.assertNotIn("FEX_DISABLEL2CACHE", env)
+                self.assertNotIn("DXVK_HUD", env)
+
     def test_proton_logs_follow_each_session_and_preserve_manual_toggle(self):
         for session, flag in (("first session", "1"), ("next session", "0")):
             with self.subTest(session=session, flag=flag):

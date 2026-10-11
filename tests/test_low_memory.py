@@ -52,16 +52,38 @@ class LowMemoryTest(unittest.TestCase):
             with self.subTest(value=value):
                 self.assertEqual(LOW["game_environment"](dict(env, DROIDDECK_GPU_MEMORY_MB=value))["DXVK_CONFIG"], env["DXVK_CONFIG"])
 
-    def run_session(self, shared, env=None):
+    def run_session(self, shared, env=None, session=None, raw=False):
         with tempfile.TemporaryDirectory() as directory:
             home = Path(directory)
             config = home / ".config/droiddeck/game-environment.json"
             config.parent.mkdir(parents=True)
-            config.write_text(json.dumps({"version": 1, "shared": shared}))
+            values = {"version": 1, "shared": shared}
+            if session is not None:
+                values["sessionLowMemory"] = session
+            config.write_text(json.dumps(values))
             result = subprocess.run(["python3", str(OVERLAY / "droiddeck-low-memory")],
                                     env=dict(os.environ, HOME=directory, **(env or {})),
                                     capture_output=True, text=True, check=True)
-            return result.stdout
+            if raw:
+                return result.stdout
+            return "".join(line + "\n" for line in result.stdout.splitlines() if line.startswith(
+                ("export BL_MANGOAPP=", "export DROIDDECK_SESSION_LOW_MEMORY_ALLOCATOR=", "export DROIDDECK_SESSION_MEMORY_PROFILER=")))
+
+    def test_global_session_switch_overrides_legacy_shared_mode_and_exports_native_flags(self):
+        on = self.run_session({LOW["MODE"]: "0"}, session=True, raw=True)
+        self.assertIn("export DROIDDECK_SESSION_LOW_MEMORY=1\n", on)
+        self.assertIn("export FEX_DYNAMICL1CACHE=1\n", on)
+        self.assertIn("export FEX_DISABLEL2CACHE=1\n", on)
+        self.assertIn("export MANGOHUD=0\n", on)
+        off = self.run_session({LOW["MODE"]: "1"}, session=False, raw=True)
+        self.assertEqual(off, "export DROIDDECK_SESSION_LOW_MEMORY=0\nexport DROIDDECK_LOW_MEMORY=0\n")
+
+    def test_session_snapshot_ignores_per_game_mode_and_live_shared_changes(self):
+        on = LOW["game_environment"]({LOW["SESSION"]: "1", LOW["MODE"]: "0"})
+        self.assertEqual(on["DXVK_HUD"], "0")
+        self.assertEqual(on["FEX_DISABLEL2CACHE"], "1")
+        off = {LOW["SESSION"]: "0", LOW["MODE"]: "1", "DXVK_HUD": "fps"}
+        self.assertIs(LOW["game_environment"](off), off)
 
     def test_shared_session_mode_and_profiler_can_be_controlled_independently(self):
         self.assertEqual(self.run_session({}), "")

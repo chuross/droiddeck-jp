@@ -7,6 +7,7 @@ import re
 import sys
 
 MODE = "DROIDDECK_LOW_MEMORY"
+SESSION = "DROIDDECK_SESSION_LOW_MEMORY"
 PROFILER = "DROIDDECK_MEMORY_PROFILER"
 GPU = "DROIDDECK_GPU_MEMORY_MB"
 ALLOCATOR = "DROIDDECK_LOW_MEMORY_ALLOCATOR"
@@ -23,6 +24,11 @@ def enabled(value):
     return str(value).lower() in ("1", "on", "true", "yes")
 
 
+def low_enabled(env):
+    # The session's startup snapshot overrides legacy per-game mode variables.
+    return enabled(env.get(SESSION, env.get(MODE, "0")))
+
+
 def shared_settings(env):
     result = dict(env)
     try:
@@ -35,6 +41,11 @@ def shared_settings(env):
                     result.pop(key, None)
                 elif isinstance(value, str):
                     result[key] = value
+        if "sessionLowMemory" in config:
+            value = config["sessionLowMemory"]
+            if not isinstance(value, bool):
+                raise ValueError("invalid session low memory setting")
+            result[MODE] = "1" if value else "0"
     except FileNotFoundError:
         pass
     except (OSError, ValueError, TypeError, AttributeError):
@@ -50,7 +61,7 @@ def allocator_tunables(value):
 
 
 def allocator_environment(env):
-    if enabled(env.get(MODE, "0")) and enabled(env.get(ALLOCATOR, "1")):
+    if low_enabled(env) and enabled(env.get(ALLOCATOR, "1")):
         return dict(env, GLIBC_TUNABLES=allocator_tunables(env.get("GLIBC_TUNABLES", "")))
     # A game can opt out of shared low-memory allocation. Restore the pre-session
     # value only if a game profile has not supplied its own GLIBC_TUNABLES.
@@ -62,7 +73,7 @@ def allocator_environment(env):
 
 def game_environment(env):
     env = allocator_environment(env)
-    if not enabled(env.get(MODE, "0")):
+    if not low_enabled(env):
         return env
     result = dict(env)
     result.update(FEX_DYNAMICL1CACHE="1", FEX_DISABLEL2CACHE="1", MANGOHUD="0",
@@ -96,8 +107,14 @@ def main():
         # Returned as data to a quoted shell assignment, never shell code.
         print(allocator_tunables(os.environ.get("GLIBC_TUNABLES", "")), end="")
         return 0
+    print("export DROIDDECK_SESSION_LOW_MEMORY=" + ("1" if low else "0"))
+    print("export DROIDDECK_LOW_MEMORY=" + ("1" if low else "0"))
     if low:
         print("export BL_MANGOAPP=0")
+        for name, value in (("FEX_DYNAMICL1CACHE", "1"), ("FEX_DISABLEL2CACHE", "1"),
+                            ("MANGOHUD", "0"), ("DXVK_HUD", "0"), ("GALLIUM_HUD", ""),
+                            ("SteamNoOverlayUI", "1")):
+            print("export " + name + "=" + value)
         if enabled(env.get(ALLOCATOR, "1")):
             print("export DROIDDECK_SESSION_LOW_MEMORY_ALLOCATOR=1")
     if enabled(env.get(PROFILER, "1" if low else "0")):
