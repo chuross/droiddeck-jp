@@ -1,4 +1,4 @@
-"""Replace only the rebuilt ARM64X PE ntdll in a checksummed GE release."""
+"""Replace validated ARM64X ntdll and DXVK DXGI in a checksummed GE release."""
 import argparse
 import hashlib
 import json
@@ -99,6 +99,39 @@ def original_ntdll(tree):
     return candidates.pop()
 
 
+def dxvk_interface(path):
+    try:
+        interface = pe_interface(path)
+    except (ValueError, struct.error, IndexError, UnicodeError) as error:
+        raise ValueError("invalid DXVK DXGI PE image") from error
+    if interface["machine"] != 0xaa64 or not interface["arm64x_metadata"]:
+        raise ValueError("DXVK DXGI architecture mismatch: expected AA64 ARM64X")
+    if "CreateDXGIFactory" not in interface["exports"]:
+        raise ValueError("DXVK DXGI factory export is missing")
+    return interface
+
+
+def original_dxvk(tree):
+    candidates = {path.resolve() for path in tree.glob("files/lib*/wine/dxvk/aarch64-windows/dxgi.dll")
+                  if path.is_file()}
+    if len(candidates) != 1:
+        raise ValueError("expected exactly one ARM64X DXVK DXGI in GE archive")
+    original = candidates.pop()
+    if not original.is_relative_to(tree.resolve()):
+        raise ValueError("DXVK target is outside GE tree")
+    dxvk_interface(original)
+    return original
+
+
+def rebuilt_dxvk(results):
+    candidates = {path.resolve() for path in (results / "dxvk").rglob("dxgi.dll") if path.is_file()}
+    if len(candidates) != 1:
+        raise ValueError("expected exactly one rebuilt DXVK DXGI; missing or ambiguous output")
+    rebuilt = candidates.pop()
+    dxvk_interface(rebuilt)
+    return rebuilt
+
+
 def write_preserving_mode(path, data):
     mode = path.stat().st_mode & 0o7777
     path.chmod(mode | 0o200)
@@ -117,26 +150,48 @@ def package(task, manager, lock_path=None):
     unpacked = task / "unpacked"
     unpacked.mkdir()
     # Only this exact official release digest is extracted with tar.
-    subprocess.run(["tar", "-xzf", str(archive), "-C", str(unpacked)], check=True)
+    subprocess.run(["tar", "-xzf", str(archive), "--same-permissions", "-C", str(unpacked)], check=True)
     tree = base_tree(unpacked)
     original = original_ntdll(tree)
     rebuilt = task / "results/ntdll.dll"
     before, after = pe_interface(original), pe_interface(rebuilt)
-    if before != after or not after["arm64x_metadata"] or "NtGetContextThread" not in after["exports"]:
+    if before != after or after["machine"] != 0xaa64 or not after["arm64x_metadata"] or "NtGetContextThread" not in after["exports"]:
         raise ValueError("rebuilt ARM64X ntdll does not match the original PE interface")
     original_hash, rebuilt_hash = sha256(original), sha256(rebuilt)
     if original_hash == rebuilt_hash:
         raise ValueError("rebuilt ntdll is unchanged")
-    write_preserving_mode(original, rebuilt.read_bytes())
+    dxvk_original = original_dxvk(tree)
+    dxvk_rebuilt = rebuilt_dxvk(task / "results")
+    dxvk_before, dxvk_after = dxvk_interface(dxvk_original), dxvk_interface(dxvk_rebuilt)
+    if dxvk_before != dxvk_after:
+        raise ValueError("rebuilt DXVK DXGI PE interface differs from original")
+    original_dxvk_hash, rebuilt_dxvk_hash = sha256(dxvk_original), sha256(dxvk_rebuilt)
+    if original_dxvk_hash == rebuilt_dxvk_hash:
+        raise ValueError("rebuilt DXVK DXGI is unchanged")
+    evidence = (task / "results/dxvk/patches.diff").read_text()
+    if "options->maxDeviceMemory : options->maxSharedMemory" not in evidence:
+        raise ValueError("DXVK budget patch evidence is missing")
+    sdk_digests = json.loads((task / "sdk-digests.json").read_text())
     name = lock["build_name"]
     compat = tree / "compatibilitytool.vdf"
     text = compat.read_text()
     if lock["base_name"] not in text:
         raise ValueError("base compatibility manifest changed")
+    # All PE, provenance and manifest checks precede replacement of either DLL.
+    write_preserving_mode(original, rebuilt.read_bytes())
+    write_preserving_mode(dxvk_original, dxvk_rebuilt.read_bytes())
     write_preserving_mode(compat, text.replace(lock["base_name"], name).encode())
-    metadata = dict(lock, manager_commit=manager, sdk_digests=json.loads((task / "sdk-digests.json").read_text()),
+    metadata = dict(lock, manager_commit=manager, sdk_digests=sdk_digests,
                     original_ntdll_sha256=original_hash,
                     rebuilt_ntdll_sha256=rebuilt_hash, pe_export_count=len(after["exports"]),
+                    features=["ntcontext-null-fix", "dxvk-dxgi-memory-budget-cap"],
+                    patches=["ntgetcontext-null.patch", "dxvk-memory-budget.patch"],
+                    original_dxvk_dxgi_sha256=original_dxvk_hash,
+                    rebuilt_dxvk_dxgi_sha256=rebuilt_dxvk_hash,
+                    dxvk_dxgi_architecture="ARM64X", dxvk_dxgi_pe_machine=hex(dxvk_after["machine"]),
+                    dxvk_dxgi_arm64x_metadata=dxvk_after["arm64x_metadata"],
+                    dxvk_dxgi_archive_path=str(dxvk_original.relative_to(tree)),
+                    dxvk_dxgi_build_path="dxvk-build/src/dxgi/dxgi.dll",
                     fix="ARM64EC NtGetContextThread(NULL) returns STATUS_INVALID_PARAMETER")
     (tree / "droiddeck-ntcontext-build.json").write_text(json.dumps(metadata, indent=2) + "\n")
     renamed = unpacked / name

@@ -52,6 +52,21 @@ class LowMemoryTest(unittest.TestCase):
             with self.subTest(value=value):
                 self.assertEqual(LOW["game_environment"](dict(env, DROIDDECK_GPU_MEMORY_MB=value))["DXVK_CONFIG"], env["DXVK_CONFIG"])
 
+    def test_gpu_limits_are_preserved_for_dxvk_and_off_is_unchanged(self):
+        for value in ("0", "1024", "2048", "3072"):
+            env = {LOW["MODE"]: "1", LOW["GPU"]: value, "DXVK_CONFIG": "dxvk.maxFrameRate = 60"}
+            result = LOW["game_environment"](env)
+            self.assertEqual(result[LOW["GPU"]], value)
+            if value == "0":
+                self.assertEqual(result["DXVK_CONFIG"], env["DXVK_CONFIG"])
+            else:
+                self.assertIn("dxgi.maxDeviceMemory = " + value, result["DXVK_CONFIG"])
+                self.assertIn("dxgi.maxSharedMemory = " + value, result["DXVK_CONFIG"])
+                self.assertTrue(result["DXVK_CONFIG"].startswith(env["DXVK_CONFIG"]))
+            self.assertNotIn("dxgi=b", result["WINEDLLOVERRIDES"])
+            off = dict(env, DROIDDECK_LOW_MEMORY="0")
+            self.assertIs(LOW["game_environment"](off), off)
+
     def run_session(self, shared, env=None, session=None, raw=False):
         with tempfile.TemporaryDirectory() as directory:
             home = Path(directory)

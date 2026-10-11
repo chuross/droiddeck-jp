@@ -4,7 +4,7 @@ task_root="$1"
 manager_root="$2"
 cd "$task_root/proton"
 bash prepare-ntcontext-wine.sh
-python3 "$manager_root/overlay/proton-ntcontext/apply.py" --wine-source "$task_root/proton/wine"
+python3 "$manager_root/overlay/proton-ntcontext/apply.py" --wine-source "$task_root/proton/wine" --dxvk-source "$task_root/proton/dxvk"
 # GE's source preparation generates these headers before configure runs makedep.
 # The generator downloads the registry version pinned in this Wine source.
 (cd "$task_root/proton/wine" && XDG_CACHE_HOME="$task_root/cache" dlls/winevulkan/make_vulkan)
@@ -24,3 +24,5 @@ llvm-objdump -dr dlls/ntdll/arm64ec-windows/signal_arm64ec.o > "$task_root/resul
 cp dlls/ntdll/arm64ec-windows/signal_arm64ec.o "$task_root/results/signal_arm64ec.o"
 llvm-readobj --file-headers --coff-exports --coff-load-config "$task_root/results/ntdll.dll" > "$task_root/results/ntdll-headers.txt"
 git -C "$task_root/proton/wine" diff --binary > "$task_root/results/ge-wine-patches.diff"
+
+bash "$manager_root/overlay/proton-ntcontext/build-dxvk.sh" "$task_root" "$manager_root"

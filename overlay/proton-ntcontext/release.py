@@ -58,6 +58,11 @@ def resolve_source(tag):
     if ref["type"] != "commit" or not SHA.fullmatch(ref["sha"]):
         raise RuntimeError("Cannot resolve exact GE release commit")
     tree = api(endpoint + "/git/trees/" + ref["sha"])
+    dxvk = [entry for entry in tree["tree"]
+            if entry["path"] == "dxvk" and entry["mode"] == "160000"
+            and entry["type"] == "commit" and SHA.fullmatch(entry["sha"])]
+    if tree.get("truncated") or len(dxvk) != 1:
+        raise RuntimeError("Cannot resolve GE DXVK submodule")
     wine = [entry for entry in tree["tree"]
             if entry["path"] == "wine" and entry["mode"] == "160000"
             and entry["type"] == "commit" and SHA.fullmatch(entry["sha"])]
@@ -65,7 +70,7 @@ def resolve_source(tag):
         raise RuntimeError("Cannot resolve GE Wine submodule")
     makefile = api(endpoint + "/contents/Makefile.in?ref=" + ref["sha"])
     sdk = arm64_sdk(base64.b64decode(makefile["content"]).decode())
-    return ref["sha"], wine[0]["sha"], sdk
+    return ref["sha"], wine[0]["sha"], dxvk[0]["sha"], sdk
 
 
 def arm64_sdk(makefile):
@@ -94,10 +99,10 @@ def candidate_lock(lock, release, resolve=resolve_source):
     digest = archive.get("digest") or ""
     if archive["browser_download_url"] != url or not re.fullmatch(r"sha256:[0-9a-f]{64}", digest):
         raise RuntimeError("Official ARM64 archive URL or SHA256 is unavailable")
-    proton, wine, sdk = resolve(tag)
+    proton, wine, dxvk, sdk = resolve(tag)
     candidate = dict(lock, proton_repository="https://github.com/" + REPOSITORY + ".git",
-                     proton_commit=proton, wine_commit=wine, base_archive=url,
-                     base_sha256=digest[7:], base_name=tag, build_name=tag + "-ntcontext-fix",
+                     proton_commit=proton, wine_commit=wine, dxvk_commit=dxvk, base_archive=url,
+                     base_sha256=digest[7:], base_name=tag, build_name=tag + "-droiddeck",
                      sdk_image=sdk)
     return candidate
 
@@ -151,7 +156,7 @@ def plan(repository, event, output):
         page += 1
     release = latest_arm_release(releases)
     lock = json.loads((ROOT / "build.lock.json").read_text())
-    existing = existing_release(repository, release["tag_name"] + "-ntcontext-fix")
+    existing = existing_release(repository, release["tag_name"] + "-droiddeck")
     result = make_plan(lock, release, event, existing)
     output.write_text(json.dumps(result, indent=2) + "\n")
     output.with_name("candidate-proton.lock.json").write_text(json.dumps(result["lock"], indent=2) + "\n")
@@ -164,7 +169,7 @@ def plan(repository, event, output):
 
 def publish(repository, manager, plan, directory):
     lock = plan["lock"]
-    if plan["tag"] != lock["build_name"] or lock["build_name"] != lock["base_name"] + "-ntcontext-fix":
+    if plan["tag"] != lock["build_name"] or lock["build_name"] != lock["base_name"] + "-droiddeck":
         raise RuntimeError("Release tag differs from Proton build")
     version(lock["base_name"])
     assets = [directory / name for name in asset_names(lock)]
@@ -186,6 +191,9 @@ def publish(repository, manager, plan, directory):
         notes.write_text("- ProtonGE: [" + lock["base_name"] + "](https://github.com/" + REPOSITORY
                          + "/releases/tag/" + lock["base_name"] + ")\n"
                          + "- ARM64EC NtGetContextThread(NULL) fix\n"
+                         + "- DXVK DXGI reported memory budget cap via existing maxDeviceMemory/maxSharedMemory options\n"
+                         + "- Applies to the normal D3D12/VKD3D-Proton DXGI path; not a RAM allocation limit\n"
+                         + "- DXVK commit: " + lock["dxvk_commit"] + "\n"
                          + "- Source commit: " + lock["proton_commit"] + "\n\n"
                          + plan["source_marker"] + "\n")
         existing = existing_release(repository, plan["tag"])

@@ -1,0 +1,24 @@
+diff --git a/src/dxgi/dxgi_adapter.cpp b/src/dxgi/dxgi_adapter.cpp
+index 259c782..4de00de 100644
+--- a/src/dxgi/dxgi_adapter.cpp
++++ b/src/dxgi/dxgi_adapter.cpp
+@@ -312,6 +312,19 @@ namespace dxvk {
+       pVideoMemoryInfo->AvailableForReservation += memInfo.heaps[i].heapSize / 2;
+     }
+ 
++    // Match GetAdapterDesc's reported memory limits without hiding actual usage.
++    // Keep the existing heap/segment classification, including empty UMA segments.
++    const DxgiOptions* options = m_factory->GetOptions();
++    VkDeviceSize memoryLimit = MemorySegmentGroup == DXGI_MEMORY_SEGMENT_GROUP_LOCAL
++      ? options->maxDeviceMemory : options->maxSharedMemory;
++
++    if (memoryLimit > 0) {
++      if (pVideoMemoryInfo->Budget > memoryLimit)
++        pVideoMemoryInfo->Budget = memoryLimit;
++      pVideoMemoryInfo->AvailableForReservation = std::min(
++        pVideoMemoryInfo->AvailableForReservation, pVideoMemoryInfo->Budget);
++    }
++
+     // We don't implement reservation, but the observable
+     // behaviour should match that of Windows drivers
+     uint32_t segmentId = uint32_t(MemorySegmentGroup);

@@ -87,8 +87,9 @@ def game_environment(env):
             layer for layer in result["VK_INSTANCE_LAYERS"].split(":") if layer != "VK_LAYER_MANGOHUD_overlay")
     overrides = result.get("WINEDLLOVERRIDES", "").strip().rstrip(";")
     result["WINEDLLOVERRIDES"] = (overrides + ";" if overrides else "") + "gameoverlayrenderer,gameoverlayrenderer64=d"
-    # Opt-in reported VRAM size, not a physical allocation cap. No equivalent
-    # supported VKD3D-Proton environment variable was found; leave D3D12 alone.
+    # Opt-in DXVK DXGI reported memory; not a physical allocation cap.
+    # GE also uses DXVK DXGI for D3D12/VKD3D-Proton. The patched DXVK
+    # applies these same options to QueryVideoMemoryInfo budgets.
     budget = result.get(GPU, "0")
     if re.fullmatch(r"[0-9]{1,5}", budget) and 256 <= int(budget) <= 16384:
         own = result.get("DXVK_CONFIG", "").strip().rstrip(";")

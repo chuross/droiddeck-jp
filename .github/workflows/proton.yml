@@ -1,4 +1,4 @@
-name: Build and publish ARM64 Proton NtGetContextThread fix
+name: Build and publish ARM64 Proton DroidDeck patches
 
 on:
   push:
@@ -49,10 +49,10 @@ jobs:
         if: steps.plan.outputs.build == 'true'
         run: |
           sudo apt-get update
-          sudo apt-get install -y git make rsync curl patch autoconf automake libtool nasm meson ninja-build
+          sudo apt-get install -y git make rsync curl patch autoconf automake libtool nasm meson ninja-build cmake
           docker info
           df -h "$GITHUB_WORKSPACE"
-      - name: Rebuild patched ARM64X ntdll and package Proton
+      - name: Rebuild patched ARM64X ntdll and DXVK DXGI and package Proton
         if: steps.plan.outputs.build == 'true'
         run: bash overlay/proton-ntcontext/build.sh candidate-proton.lock.json
       - name: Publish independent Proton Release and record tested GE version
@@ -68,6 +68,7 @@ jobs:
           path: |
             build/proton-ntcontext/results/
             build/proton-ntcontext/wine-build/config.log
+            build/proton-ntcontext/dxvk-build/meson-logs/
             build/proton-ntcontext/sdk-digests.json
           if-no-files-found: ignore
       - name: Remove temporary build source
