@@ -8,6 +8,7 @@ import unittest
 from unittest.mock import Mock, patch
 
 SOURCE = os.environ.get("DROIDDECK_JP_SOURCE")
+LOW_MEMORY = runpy.run_path(str(Path(__file__).resolve().parents[1] / "overlay/low-memory/droiddeck-low-memory"))
 
 
 class Finished(BaseException):
@@ -28,8 +29,12 @@ class LaunchIntegrationTest(unittest.TestCase):
 
     def run_launch(self, fallback):
         chosen = ["selected-proton", "waitforexitandrun", "game.exe"]
-        chosen_env = dict(self.env, BL_SYNC_PACK="selected")
         attempts = []
+
+        def helper(path):
+            if str(path).endswith("droiddeck-low-memory"):
+                return LOW_MEMORY
+            return {"prepare": self.fonts}
 
         def execute(binary, command, env):
             attempts.append((binary, command, env))
@@ -38,9 +43,9 @@ class LaunchIntegrationTest(unittest.TestCase):
             raise Finished()
 
         with patch.dict(self.globals, load_sync=lambda: {},
-                        select_sync=lambda command, env, sync: (chosen, chosen_env),
+                        select_sync=lambda command, env, sync: (chosen, dict(env, BL_SYNC_PACK="selected")),
                         record_stock=lambda *args: None), \
-             patch.object(self.globals["runpy"], "run_path", return_value={"prepare": self.fonts}), \
+             patch.object(self.globals["runpy"], "run_path", side_effect=helper), \
              patch.object(self.globals["os"], "execvpe", side_effect=execute), \
              patch.dict(os.environ, self.env, clear=True), \
              patch.object(self.globals["sys"], "argv",
@@ -68,6 +73,31 @@ class LaunchIntegrationTest(unittest.TestCase):
         self.assertNotIn("BL_SYNC_PACK", env)
         self.assertEqual(command, attempts[1][1])
 
+
+    def test_low_memory_on_then_off_restores_original_launch_settings(self):
+        original = dict(self.env, LD_PRELOAD="/steam/gameoverlayrenderer.so:/usr/lib/keep.so",
+                        WINEDLLOVERRIDES="foo=b", DXVK_CONFIG="dxvk.maxFrameRate = 60",
+                        DXVK_HUD="fps", MANGOHUD="1", FEX_DYNAMICL1CACHE="0", FEX_DISABLEL2CACHE="0",
+                        DROIDDECK_GPU_MEMORY_MB="2048")
+        for fallback in (False, True):
+            self.env = dict(original, DROIDDECK_LOW_MEMORY="1")
+            for _, _, env in self.run_launch(fallback):
+                self.assertEqual(env["LD_PRELOAD"], "/usr/lib/keep.so")
+                self.assertEqual(env["MANGOHUD"], "0")
+                self.assertEqual(env["FEX_DISABLEL2CACHE"], "1")
+                self.assertIn("dxgi.maxDeviceMemory = 2048", env["DXVK_CONFIG"])
+            self.env = dict(original, DROIDDECK_LOW_MEMORY="0")
+            for _, _, env in self.run_launch(fallback):
+                for name, value in original.items():
+                    self.assertEqual(env[name], value)
+
+    def test_per_game_opt_out_restores_shared_low_memory_game_flags(self):
+        config = {"version": 1, "shared": {"DROIDDECK_LOW_MEMORY": "1"},
+                  "games": {"123": {"DROIDDECK_LOW_MEMORY": "0"}}}
+        self.env = self.module["apply_config"](self.env, config, "123")
+        env = self.run_launch(False)[0][2]
+        self.assertEqual(env["DROIDDECK_LOW_MEMORY"], "0")
+        self.assertNotIn("FEX_DISABLEL2CACHE", env)
 
     def test_proton_logs_follow_each_session_and_preserve_manual_toggle(self):
         for session, flag in (("first session", "1"), ("next session", "0")):

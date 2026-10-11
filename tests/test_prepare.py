@@ -147,7 +147,9 @@ class PrepareTest(unittest.TestCase):
         proot.parent.mkdir(parents=True)
         proot.write_text(builder.PATCHES["build-cache"].BEFORE)
         with patch.object(fonts, "bundle_fonts"), \
-             patch.object(imports, "check"), patch.object(imports, "apply"):
+             patch.object(imports, "check"), patch.object(imports, "apply"), \
+             patch.object(builder.PATCHES["low-memory"], "check"), \
+             patch.object(builder.PATCHES["low-memory"], "apply"):
             builder.overlay(self.source)
         for name, text in preserved.items():
             self.assertEqual((target / name).read_text(), text)

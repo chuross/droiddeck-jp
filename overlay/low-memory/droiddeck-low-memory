@@ -1,0 +1,76 @@
+#!/usr/bin/python3
+"""Only emit fixed shell assignments; never evaluate user-supplied settings."""
+import json
+import os
+from pathlib import Path
+import re
+import sys
+
+MODE = "DROIDDECK_LOW_MEMORY"
+PROFILER = "DROIDDECK_MEMORY_PROFILER"
+GPU = "DROIDDECK_GPU_MEMORY_MB"
+
+
+def enabled(value):
+    return str(value).lower() in ("1", "on", "true", "yes")
+
+
+def shared_settings(env):
+    result = dict(env)
+    try:
+        config = json.loads((Path.home() / ".config/droiddeck/game-environment.json").read_text())
+        if config.get("version") != 1:
+            raise ValueError("unsupported configuration")
+        for key, value in config.get("shared", {}).items():
+            if key in (MODE, PROFILER):
+                if value is None:
+                    result.pop(key, None)
+                elif isinstance(value, str):
+                    result[key] = value
+    except FileNotFoundError:
+        pass
+    except (OSError, ValueError, TypeError, AttributeError):
+        print("low-memory: invalid shared settings; using inherited settings", file=sys.stderr)
+    return result
+
+
+def game_environment(env):
+    if not enabled(env.get(MODE, "0")):
+        return env
+    result = dict(env)
+    result.update(FEX_DYNAMICL1CACHE="1", FEX_DISABLEL2CACHE="1", MANGOHUD="0",
+                  DXVK_HUD="0", GALLIUM_HUD="", SteamNoOverlayUI="1")
+    # Steam preloads its Linux overlay into Proton. Remove only these libraries.
+    preload = [p for p in re.split(r"[:\s]+", result.get("LD_PRELOAD", "")) if p]
+    blocked = {"gameoverlayrenderer.so", "libMangoHud.so", "libMangoHud_dlsym.so"}
+    result["LD_PRELOAD"] = ":".join(p for p in preload if p.rsplit("/", 1)[-1] not in blocked)
+    if "VK_INSTANCE_LAYERS" in result:
+        result["VK_INSTANCE_LAYERS"] = ":".join(
+            layer for layer in result["VK_INSTANCE_LAYERS"].split(":") if layer != "VK_LAYER_MANGOHUD_overlay")
+    overrides = result.get("WINEDLLOVERRIDES", "").strip().rstrip(";")
+    result["WINEDLLOVERRIDES"] = (overrides + ";" if overrides else "") + "gameoverlayrenderer,gameoverlayrenderer64=d"
+    # Opt-in reported VRAM size, not a physical allocation cap. No equivalent
+    # supported VKD3D-Proton environment variable was found; leave D3D12 alone.
+    budget = result.get(GPU, "0")
+    if re.fullmatch(r"[0-9]{1,5}", budget) and 256 <= int(budget) <= 16384:
+        own = result.get("DXVK_CONFIG", "").strip().rstrip(";")
+        options = "dxgi.maxDeviceMemory = %s; dxgi.maxSharedMemory = %s" % (budget, budget)
+        result["DXVK_CONFIG"] = (own + "; " if own else "") + options
+    elif budget != "0":
+        print("low-memory: ignored invalid GPU memory report (256..16384 MB or 0)", file=sys.stderr)
+    print("low-memory: game overlay/HUD off, FEX dynamic L1 on/L2 off", file=sys.stderr)
+    return result
+
+
+def main():
+    env = shared_settings(os.environ)
+    low = enabled(env.get(MODE, "0"))
+    if low:
+        print("export BL_MANGOAPP=0")
+    if enabled(env.get(PROFILER, "1" if low else "0")):
+        print("export DROIDDECK_SESSION_MEMORY_PROFILER=1")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

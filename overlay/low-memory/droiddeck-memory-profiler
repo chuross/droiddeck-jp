@@ -1,0 +1,138 @@
+#!/usr/bin/python3
+"""Best-effort same-UID /proc PSS snapshots, excluding command-line arguments."""
+import json
+import os
+from pathlib import Path
+import sys
+import time
+
+CAP = 8 * 1024 * 1024
+
+
+def fields(path):
+    values = {}
+    for line in path.read_text().splitlines():
+        key, separator, value = line.partition(":")
+        if separator:
+            values[key] = value.strip()
+    return values
+
+
+def kb(values, key):
+    try:
+        return int(values[key].split()[0])
+    except (KeyError, ValueError, IndexError):
+        return None
+
+
+def identity(proc, pid):
+    # comm can contain spaces or parentheses. starttime detects PID reuse.
+    stat = (proc / str(pid) / "stat").read_text().rsplit(")", 1)[1].split()
+    return None if stat[0] == "Z" else stat[19]
+
+
+def category(name, binary):
+    value = (name + " " + binary).lower()
+    for key, matches in (
+        ("steamwebhelper", ("steamwebhelper",)),
+        ("gamescope", ("gamescope",)), ("xwayland", ("xwayland",)),
+        ("wineserver", ("wineserver",)), ("fex", ("fexinterpreter", "fexloader",)),
+        ("steam", ("steam",)), ("wine_proton", ("wine", "proton")),
+    ):
+        if any(match in value for match in matches):
+            return key
+    return "game_other" if name.lower().endswith(".exe") else "other"
+
+
+def zram_stats(sys_block=Path("/sys/block")):
+    result = {}
+    for device in sys_block.glob("zram*"):
+        try:
+            values = [int(value) for value in (device / "mm_stat").read_text().split()[:3]]
+            if len(values) == 3:
+                result[device.name] = dict(zip(("original_bytes", "compressed_bytes", "physical_used_bytes"), values))
+        except (OSError, ValueError):
+            result[device.name] = None
+    return result
+
+
+def snapshot(proc=Path("/proc"), uid=None):
+    if uid is None:
+        # proot can report getuid() as 0 while /proc still exposes the Android UID.
+        try:
+            uid = int(fields(proc / "self/status")["Uid"].split()[0])
+        except (OSError, KeyError, ValueError):
+            uid = os.getuid()
+    processes, totals, unreadable = [], {}, 0
+    for directory in proc.iterdir():
+        if not directory.name.isdigit():
+            continue
+        try:
+            status = fields(directory / "status")
+            if int(status["Uid"].split()[0]) != uid:
+                continue
+            name = status.get("Name", "unknown")
+            try:
+                # Never log arguments: Steam command lines can contain credentials.
+                binary = (directory / "cmdline").read_bytes().split(b"\0", 1)[0].decode(errors="replace").rsplit("/", 1)[-1]
+            except OSError:
+                binary = name
+            group = category(name, binary)
+            try:
+                memory = fields(directory / "smaps_rollup")
+                pss, swap_pss = kb(memory, "Pss"), kb(memory, "SwapPss")
+            except OSError:
+                pss, swap_pss = None, None
+            if pss is None:
+                unreadable += 1
+            record = {"pid": int(directory.name), "name": name, "category": group,
+                      "pss_kb": pss, "rss_kb": kb(status, "VmRSS"), "swap_pss_kb": swap_pss}
+            processes.append(record)
+            if pss is not None:
+                totals[group] = totals.get(group, 0) + pss
+        except (OSError, KeyError, ValueError):
+            continue
+    try:
+        system = fields(proc / "meminfo")
+    except OSError:
+        system = {}
+    return {"timestamp": time.time(), "units": "kB", "scope": "visible_same_uid",
+            "system": {key: kb(system, key) for key in
+                       ("MemTotal", "MemAvailable", "SwapTotal", "SwapFree")},
+            "pss_by_category": totals, "pss_unreadable_processes": unreadable,
+            "zram": zram_stats(),
+            "gpu_allocations": "not_measured", "fex_accounting": "included_in_host_process",
+            "processes": processes}
+
+
+def append(path, record):
+    if path.exists() and path.stat().st_size >= CAP:
+        path.replace(path.with_suffix(path.suffix + ".1"))
+    with path.open("a", encoding="utf-8") as stream:
+        stream.write(json.dumps(record, ensure_ascii=True) + "\n")
+        stream.flush()
+
+
+def main():
+    if len(sys.argv) != 2:
+        return 2
+    proc = Path("/proc")
+    parent = int(sys.argv[1])
+    directory = os.environ.get("BL_DEBUG_DIR") or os.path.dirname(os.environ.get("BL_LOG", ""))
+    if not directory or not os.path.isabs(directory):
+        print("memory-profiler: no session log directory; disabled", file=sys.stderr)
+        return 0
+    try:
+        path = Path(directory) / "memory.jsonl"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        start = identity(proc, parent)
+        while start is not None and identity(proc, parent) == start:
+            append(path, snapshot(proc))
+            time.sleep(5)
+    except (OSError, ValueError) as error:
+        print("memory-profiler: stopped (%s)" % error, file=sys.stderr)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

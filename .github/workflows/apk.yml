@@ -11,6 +11,7 @@ on:
       - 'overlay/steam-diagnostics/**'
       - 'overlay/proton-import/**'
       - 'overlay/build-cache/**'
+      - 'overlay/low-memory/**'
       - 'upstream.lock.json'
       - '.github/workflows/apk.yml'
   workflow_dispatch:

@@ -1,0 +1,103 @@
+diff --git a/app/src/main/java/com/droiddeck/launcher/core/GameEnvironmentOptions.kt b/app/src/main/java/com/droiddeck/launcher/core/GameEnvironmentOptions.kt
+index 078ae816..8231c3a8 100644
+--- a/app/src/main/java/com/droiddeck/launcher/core/GameEnvironmentOptions.kt
++++ b/app/src/main/java/com/droiddeck/launcher/core/GameEnvironmentOptions.kt
+@@ -7,6 +7,9 @@ object GameEnvironmentOptions {
+     data class Option(val name: String, val value: String, val detail: Int, val type: Type, val choices: List<String> = emptyList())
+ 
+     val all = listOf(
++        Option("DROIDDECK_LOW_MEMORY", "1", R.string.jp_low_memory_hint, Type.TOGGLE, listOf("0", "1")),
++        Option("DROIDDECK_MEMORY_PROFILER", "1", R.string.jp_memory_profiler_hint, Type.TOGGLE, listOf("0", "1")),
++        Option("DROIDDECK_GPU_MEMORY_MB", "0", R.string.jp_gpu_memory_hint, Type.CHOICE, listOf("0", "1024", "2048", "3072")),
+         Option("MESA_SHADER_CACHE_DISABLE", "false", R.string.game_env_cache, Type.TOGGLE, listOf("false", "true")),
+         Option("VKD3D_FEATURE_LEVEL", "12_2", R.string.game_env_feature, Type.CHOICE, listOf("12_2", "12_1", "12_0", "11_1", "11_0")),
+         Option("VKD3D_SHADER_MODEL", "6_9", R.string.game_env_shader, Type.CHOICE, listOf("6_9", "6_8", "6_7", "6_6", "6_5", "6_4", "6_3", "6_2", "6_1", "6_0", "5_1")),
+diff --git a/app/src/main/java/com/droiddeck/launcher/ui/GameEnvironmentEditor.kt b/app/src/main/java/com/droiddeck/launcher/ui/GameEnvironmentEditor.kt
+index 3ca96d6c..23af9953 100644
+--- a/app/src/main/java/com/droiddeck/launcher/ui/GameEnvironmentEditor.kt
++++ b/app/src/main/java/com/droiddeck/launcher/ui/GameEnvironmentEditor.kt
+@@ -160,6 +160,13 @@ private fun GameEnvironmentEditor(byPad: Boolean, onClose: () -> Unit) {
+         if (current == null && !error) Small(stringResource(R.string.game_env_loading))
+         if (current != null) {
+             val own = current.entries(scope)
++            val lowMemory = GameEnvironment.effective(current, preset, scope, forceSsbs)["DROIDDECK_LOW_MEMORY"]
++            SettingsRow(stringResource(R.string.jp_low_memory), stringResource(R.string.jp_low_memory_hint)) {
++                ToggleSwitch(lowMemory?.lowercase() in listOf("1", "on", "true", "yes"), enabled = !busy,
++                    label = stringResource(R.string.jp_low_memory)) { on ->
++                    save(current.withEntries(scope, own + ("DROIDDECK_LOW_MEMORY" to if (on) "1" else "0")))
++                }
++            }
+             val entries = GameEnvironment.effective(current, preset, scope, forceSsbs).toSortedMap()
+             if (entries.isEmpty()) Small(stringResource(R.string.game_env_empty))
+             else Panel {
+diff --git a/app/src/main/res/values-ja/strings.xml b/app/src/main/res/values-ja/strings.xml
+index 3d333fe9..25ffa60c 100644
+--- a/app/src/main/res/values-ja/strings.xml
++++ b/app/src/main/res/values-ja/strings.xml
+@@ -2064,4 +2064,8 @@
+     <string name="device_info_copied">コピーしました。</string>
+     <string name="force_ssbs_title">SSBSを強制</string>
+     <string name="force_ssbs_hint">Wineがオフにし続けるCPUの速度設定をオンに保ちます。Snapdragon 8 EliteではWindowsゲームが速くなることがあります。古いチップではほとんど変化がありません。次のゲーム起動時に反映されます。</string>
++    <string name="jp_low_memory">Low Memory モード</string>
++    <string name="jp_low_memory_hint">ゲームのOverlay・HUDを無効化し、FEXの省メモリキャッシュを使用。共有設定では次回セッションからMangoAppも停止し、5秒ごとにメモリを記録します。ゲーム別の変更は次回ゲーム起動時に適用します。OFFにすると再起動後は元の起動設定に戻ります。</string>
++    <string name="jp_memory_profiler_hint">共有設定で有効にすると、読み取れるプロセスのPSSとシステム・swapを5秒ごとに記録。共有Low Memoryモードでは標準で有効。読取不可のPSSとGPU確保量は不明として扱います。保存先はセッション内のmemory.jsonl。</string>
++    <string name="jp_gpu_memory_hint">実験用：DXVKが通知するGPUメモリ量（MB、0は変更なし）。Low Memoryモード時のみ適用。ゲームが無視する場合があり、RAMの上限ではありません。VKD3D・D3D12には適用しません。</string>
+ </resources>
+diff --git a/app/src/main/res/values/strings.xml b/app/src/main/res/values/strings.xml
+index a240c5ad..0aa8796c 100644
+--- a/app/src/main/res/values/strings.xml
++++ b/app/src/main/res/values/strings.xml
+@@ -1959,4 +1959,8 @@
+     <string name="device_info_copied">Copied.</string>
+     <string name="force_ssbs_title">Force SSBS</string>
+     <string name="force_ssbs_hint">Keeps a CPU speed setting on that Wine keeps turning off. Can make Windows games faster on Snapdragon 8 Elite; little change seen on older chips. Applies on the next game launch.</string>
++    <string name="jp_low_memory">Low Memory Mode</string>
++    <string name="jp_low_memory_hint">Disable game overlay and HUD; use memory-saving FEX caches. Shared profile also disables MangoApp and records memory every 5 seconds from the next session. Per-game overrides apply at next game launch. Turning this off restores your usual launch settings on restart.</string>
++    <string name="jp_memory_profiler_hint">Shared profile: record visible process PSS and system/swap memory every 5 seconds. Enabled by default in shared Low Memory Mode. Unreadable PSS and GPU allocations remain unknown. Logs: memory.jsonl in the session folder.</string>
++    <string name="jp_gpu_memory_hint">Experimental DXVK reported GPU memory in MB (0: unchanged). Active only in Low Memory Mode. Games may ignore this; it is not a RAM limit. Does not configure VKD3D/D3D12.</string>
+ </resources>
+diff --git a/tools/linuxfs/overlay/usr/local/bin/droiddeck-game-env b/tools/linuxfs/overlay/usr/local/bin/droiddeck-game-env
+index e8f5605a..24d40810 100755
+--- a/tools/linuxfs/overlay/usr/local/bin/droiddeck-game-env
++++ b/tools/linuxfs/overlay/usr/local/bin/droiddeck-game-env
+@@ -290,6 +290,13 @@ def main():
+                 env = apply_config(env, {"version": 1}, app_id, fixes)
+         except (OSError, ValueError, TypeError, AttributeError):
+             print("droiddeck-game-env: invalid configuration; using inherited environment", file=sys.stderr)
++    if (len(command) > 1 and command[1] == "waitforexitandrun"
++            and env.get("DROIDDECK_LOW_MEMORY", "0").lower() in ("1", "on", "true", "yes")):
++        try:
++            low_memory = runpy.run_path("/usr/local/bin/droiddeck-low-memory")
++            env = low_memory["game_environment"](env)
++        except (OSError, ValueError) as error:
++            print("low-memory: settings not applied (%s)" % error, file=sys.stderr)
+     env = force_ssbs(command, env)
+     sync = load_sync()
+     launch, launch_env = select_sync(command, env, sync)
+diff --git a/tools/linuxfs/overlay/usr/local/bin/droiddeck-session b/tools/linuxfs/overlay/usr/local/bin/droiddeck-session
+index 3dbeaef1..faa9fcd4 100755
+--- a/tools/linuxfs/overlay/usr/local/bin/droiddeck-session
++++ b/tools/linuxfs/overlay/usr/local/bin/droiddeck-session
+@@ -29,6 +29,22 @@ if [ -n "${BL_LOG:-}" ] && [ -z "${BL_INSIDE:-}" ]; then
+   echo "== rootfs: $(cat /.version 2>/dev/null || echo unversioned)"
+ fi
+ 
++# Shared low-memory settings are resolved before gamescope starts MangoApp.
++# This helper emits only fixed assignments, never values from the config file.
++if [ -z "${BL_INSIDE:-}" ]; then
++  if [ -x /usr/local/bin/droiddeck-low-memory ]; then
++    while IFS= read -r setting; do
++      case "$setting" in
++        "export BL_MANGOAPP=0") export BL_MANGOAPP=0 ;;
++        "export DROIDDECK_SESSION_MEMORY_PROFILER=1") export DROIDDECK_SESSION_MEMORY_PROFILER=1 ;;
++      esac
++    done < <(/usr/local/bin/droiddeck-low-memory)
++  fi
++  if [ "${DROIDDECK_SESSION_MEMORY_PROFILER:-0}" = 1 ] && [ -x /usr/local/bin/droiddeck-memory-profiler ]; then
++    /usr/local/bin/droiddeck-memory-profiler "$$" &
++  fi
++fi
++
+ # Until the runtime is stable, Steam's own logs are copied beside the session log at exit so a
+ # failed launch can be handed over as one folder.
+ collect_steam_logs() {
