@@ -103,12 +103,16 @@ class LowMemoryTest(unittest.TestCase):
     def test_shared_session_mode_and_profiler_can_be_controlled_independently(self):
         self.assertEqual(self.run_session({}), "")
         self.assertEqual(self.run_session({LOW["MODE"]: "1"}),
-                         "export BL_MANGOAPP=0\nexport DROIDDECK_SESSION_LOW_MEMORY_ALLOCATOR=1\nexport DROIDDECK_SESSION_MEMORY_PROFILER=1\n")
+                         "export BL_MANGOAPP=0\nexport DROIDDECK_SESSION_LOW_MEMORY_ALLOCATOR=1\n")
         self.assertEqual(self.run_session({LOW["MODE"]: "1", LOW["PROFILER"]: "0"}),
                          "export BL_MANGOAPP=0\nexport DROIDDECK_SESSION_LOW_MEMORY_ALLOCATOR=1\n")
         self.assertEqual(self.run_session({LOW["PROFILER"]: "1"}), "export DROIDDECK_SESSION_MEMORY_PROFILER=1\n")
         self.assertEqual(self.run_session({LOW["MODE"]: "$(touch /tmp/no)"}), "")
         self.assertEqual(self.run_session({LOW["MODE"]: None}, {LOW["MODE"]: "1"}), "")
+
+    def test_explicit_profiler_on_is_preserved_with_low_memory(self):
+        self.assertIn("export DROIDDECK_SESSION_MEMORY_PROFILER=1\n",
+                      self.run_session({LOW["MODE"]: "1", LOW["PROFILER"]: "1"}))
 
     def test_allocator_preserves_unrelated_tunables_and_replaces_duplicates(self):
         baseline = "glibc.pthread.rseq=0:glibc.malloc.top_pad=16777216:glibc.malloc.arena_max=8:glibc.malloc.top_pad=42:glibc.malloc.tcache_count=7"
@@ -222,6 +226,23 @@ class MemoryProfilerTest(unittest.TestCase):
         with patch.object(PROFILE["os"], "getuid", return_value=0):
             result = PROFILE["snapshot"](self.proc)
         self.assertEqual(result["pss_by_category"], {"steam": 100})
+
+    def test_stall_metrics_and_measurement_duration(self):
+        (self.proc / "pressure").mkdir()
+        (self.proc / "pressure/memory").write_text("some avg10=2.5 avg60=1.0 avg300=0.1 total=1234\nfull avg10=1.0 avg60=0.5 avg300=0.0 total=456\n")
+        (self.proc / "vmstat").write_text("pgmajfault 12\npswpin 30\npswpout 40\npgscan_direct 90\nallocstall_normal 3\noom_kill 1\nunrelated 999\n")
+        self.process(1, "Game.exe")
+        result = PROFILE["snapshot"](self.proc, uid=123)
+        self.assertEqual(result["stalls"]["pressure"]["memory"]["full"]["total_us"], 456)
+        self.assertEqual(result["stalls"]["vmstat_counters"]["pgmajfault"], 12)
+        self.assertNotIn("unrelated", result["stalls"]["vmstat_counters"])
+        self.assertIsNone(result["stalls"]["pressure"]["io"])
+        self.assertGreaterEqual(result["collection_duration_ms"], 0)
+        self.assertLessEqual(result["collection_started_at"], result["timestamp"])
+
+    def test_restricted_stall_metrics_are_unknown(self):
+        self.assertEqual(PROFILE["stall_metrics"](self.proc),
+                         {"scope": "system", "pressure": {"memory": None, "io": None, "cpu": None}, "vmstat_counters": None})
 
     def test_log_rotation_keeps_current_and_one_previous_file(self):
         path = Path(self.temp.name) / "memory.jsonl"

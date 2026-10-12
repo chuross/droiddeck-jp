@@ -56,7 +56,34 @@ def zram_stats(sys_block=Path("/sys/block")):
     return result
 
 
+def stall_metrics(proc):
+    # System-wide cumulative counters; restricted Android /proc stays unknown.
+    pressure = {}
+    for kind in ("memory", "io", "cpu"):
+        try:
+            rows = {}
+            for line in (proc / "pressure" / kind).read_text().splitlines():
+                name, *values = line.split()
+                row = dict(value.split("=", 1) for value in values)
+                rows[name] = {key: float(row[key]) for key in ("avg10", "avg60", "avg300")}
+                rows[name]["total_us"] = int(row["total"])
+            pressure[kind] = rows
+        except (OSError, ValueError, KeyError):
+            pressure[kind] = None
+    try:
+        counters = {}
+        for line in (proc / "vmstat").read_text().splitlines():
+            key, value = line.split()
+            if key in ("pgmajfault", "pswpin", "pswpout", "oom_kill") or key.startswith(("pgscan_", "pgsteal_", "allocstall")):
+                counters[key] = int(value)
+    except (OSError, ValueError):
+        counters = None
+    return {"scope": "system", "pressure": pressure, "vmstat_counters": counters}
+
+
 def snapshot(proc=Path("/proc"), uid=None):
+    started = time.monotonic()
+    wall_started = time.time()
     if uid is None:
         # proot can report getuid() as 0 while /proc still exposes the Android UID.
         try:
@@ -102,7 +129,9 @@ def snapshot(proc=Path("/proc"), uid=None):
             "pss_by_category": totals, "pss_unreadable_processes": unreadable,
             "zram": zram_stats(),
             "gpu_allocations": "not_measured", "fex_accounting": "included_in_host_process",
-            "processes": processes}
+            "processes": processes, "stalls": stall_metrics(proc),
+            "collection_started_at": wall_started,
+            "collection_duration_ms": round((time.monotonic() - started) * 1000, 3)}
 
 
 def append(path, record):
@@ -116,6 +145,11 @@ def append(path, record):
 def main():
     if len(sys.argv) != 2:
         return 2
+    # Profiling is diagnostic work, not a competitor for game CPU time.
+    try:
+        os.nice(10)
+    except OSError:
+        pass
     proc = Path("/proc")
     parent = int(sys.argv[1])
     directory = os.environ.get("BL_DEBUG_DIR") or os.path.dirname(os.environ.get("BL_LOG", ""))

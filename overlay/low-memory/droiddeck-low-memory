@@ -88,7 +88,7 @@ def game_environment(env):
     overrides = result.get("WINEDLLOVERRIDES", "").strip().rstrip(";")
     result["WINEDLLOVERRIDES"] = (overrides + ";" if overrides else "") + "gameoverlayrenderer,gameoverlayrenderer64=d"
     # Opt-in DXVK DXGI reported memory; not a physical allocation cap.
-    # GE also uses DXVK DXGI for D3D12/VKD3D-Proton. The patched DXVK
+    # ARM64 Proton also uses DXVK DXGI for D3D12/VKD3D-Proton. The patched DXVK
     # applies these same options to QueryVideoMemoryInfo budgets.
     budget = result.get(GPU, "0")
     if re.fullmatch(r"[0-9]{1,5}", budget) and 256 <= int(budget) <= 16384:
@@ -118,7 +118,7 @@ def main():
             print("export " + name + "=" + value)
         if enabled(env.get(ALLOCATOR, "1")):
             print("export DROIDDECK_SESSION_LOW_MEMORY_ALLOCATOR=1")
-    if enabled(env.get(PROFILER, "1" if low else "0")):
+    if enabled(env.get(PROFILER, "0")):
         print("export DROIDDECK_SESSION_MEMORY_PROFILER=1")
     return 0
 
