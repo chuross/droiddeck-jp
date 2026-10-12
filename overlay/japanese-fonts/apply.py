@@ -17,6 +17,9 @@ IPAMONA_URLS = (
 # Pinned to the same complete upstream distribution used by Winetricks.
 IPAMONA_SHA256 = "ab77beea3b051abf606cd8cd3badf6cb24141ef145c60f508fcfef1e3852bb9d"
 
+# Android's asset merger expands *.gz and strips that suffix. Keep the original archive bytes.
+IPAMONA_ARCHIVE = IPAMONA_PACKAGE + ".tar.gzip"
+
 IPAMONA_FILES = ("ipag-mona.ttf", "ipagp-mona.ttf", "ipagui-mona.ttf",
                  "ipam-mona.ttf", "ipamp-mona.ttf")
 
@@ -54,7 +57,7 @@ def bundle_fonts(source):
         (target / filename).write_bytes(content)
     # Preserve the COMPLETE unmodified distribution, including printer driver,
     # source, notices and licenses required by the original IPA license.
-    (target / (IPAMONA_PACKAGE + ".tar.gz")).write_bytes(archive)
+    (target / IPAMONA_ARCHIVE).write_bytes(archive)
     # build_local.sh only installs selected overlay directories. Add an explicit
     # copy into linuxfs assets so the fonts and their license reach the APK.
     script = source / "tools/build_local.sh"
@@ -100,7 +103,7 @@ def patch_game_fonts(source):
 HELPERS = ("droiddeck-patch-fonts",)
 ASSETS = tuple("usr/local/bin/" + name for name in HELPERS) + tuple(
     "usr/local/share/fonts/droiddeck-patch/" + name
-    for name in (*IPAMONA_FILES, IPAMONA_PACKAGE + ".tar.gz")
+    for name in (*IPAMONA_FILES, IPAMONA_ARCHIVE)
 )
 
 def apply(source):

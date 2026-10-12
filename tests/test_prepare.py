@@ -64,7 +64,7 @@ class PrepareTest(unittest.TestCase):
         target = self.source / "tools/linuxfs/overlay/usr/local/share/fonts/droiddeck-patch"
         for name in fonts.IPAMONA_FILES:
             self.assertEqual((target / name).read_bytes(), name.encode())
-        self.assertEqual((target / (fonts.IPAMONA_PACKAGE + ".tar.gz")).read_bytes(), archive)
+        self.assertEqual((target / fonts.IPAMONA_ARCHIVE).read_bytes(), archive)
         self.assertLess(script.index("install -m644"), script.index("./gradlew"))
         subprocess.run(["bash", "-n", str(self.source / "tools/build_local.sh")], check=True)
 
@@ -116,7 +116,7 @@ class PrepareTest(unittest.TestCase):
         self.assertIn('"usr/local/bin/droiddeck-patch-fonts" to "usr/local/bin/droiddeck-patch-fonts"', text)
         for helper in tuple(helper for module in builder.PATCHES.values() for helper in getattr(module, "HELPERS", ())):
             self.assertEqual(text.count('"usr/local/bin/' + helper + '" to'), 1)
-        for name in (*fonts.IPAMONA_FILES, fonts.IPAMONA_PACKAGE + ".tar.gz"):
+        for name in (*fonts.IPAMONA_FILES, fonts.IPAMONA_ARCHIVE):
             path = "usr/local/share/fonts/droiddeck-patch/" + name
             self.assertIn('"%s" to "%s"' % (path, path), text)
 
