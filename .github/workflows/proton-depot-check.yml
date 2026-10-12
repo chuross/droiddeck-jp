@@ -21,7 +21,7 @@ jobs:
           curl -fL --retry 3 https://steamcdn-a.akamaihd.net/client/installer/steamcmd_linux.tar.gz -o steamcmd.tar.gz
           tar -xzf steamcmd.tar.gz
           set +e
-          timeout 20m ./steamcmd.sh +login anonymous +download_depot 4427310 4427311 +quit 2>&1 | tee download.log
+          timeout 20m ./steamcmd.sh +login anonymous +app_info_update 1 +app_info_print 4427310 +download_depot 4427310 4427311 +quit 2>&1 | tee download.log
           result=${PIPESTATUS[0]}
           set -e
           echo "SteamCMD exit: $result"
