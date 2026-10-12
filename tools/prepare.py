@@ -10,7 +10,7 @@ import subprocess
 import sys
 
 ROOT = Path(__file__).resolve().parents[1]
-PATCH_NAMES = ("japanese-fonts", "proton-logs", "steam-diagnostics", "proton-import", "build-cache", "low-memory", "suspend-survival")
+PATCH_NAMES = ("japanese-fonts", "proton-logs", "steam-diagnostics", "proton-import", "build-cache", "low-memory", "suspend-survival", "readable-toasts")
 
 
 def load_patch(name):
@@ -120,6 +120,7 @@ if __name__ == "__main__":
         if isinstance(error, subprocess.CalledProcessError):
             print(error.stderr or "", file=sys.stderr)
         sys.exit(1)
+
 
 
 

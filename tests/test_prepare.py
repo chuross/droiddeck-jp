@@ -151,7 +151,9 @@ class PrepareTest(unittest.TestCase):
              patch.object(builder.PATCHES["low-memory"], "check"), \
              patch.object(builder.PATCHES["low-memory"], "apply"), \
              patch.object(builder.PATCHES["suspend-survival"], "check"), \
-             patch.object(builder.PATCHES["suspend-survival"], "apply"):
+             patch.object(builder.PATCHES["suspend-survival"], "apply"), \
+             patch.object(builder.PATCHES["readable-toasts"], "check"), \
+             patch.object(builder.PATCHES["readable-toasts"], "apply"):
             builder.overlay(self.source)
         for name, text in preserved.items():
             self.assertEqual((target / name).read_text(), text)
@@ -185,6 +187,7 @@ class PrepareTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
 
 
 

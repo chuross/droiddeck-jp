@@ -215,6 +215,37 @@ class ProtonImportIntegrationTest(ProtonImportTest):
         subprocess.run(["bash", "-n", str(tree / "droiddeck-proton-wrap")], check=True)
         self.assertIn("ddjp-import-Test-Proton", self.compat["adopt_extras"](str(self.tools)))
 
+    def test_current_plop_layout_installs_and_registers_with_real_wrapper(self):
+        packaging = runpy.run_path(str(ROOT / "overlay/proton-ntcontext/package.py"))
+        lock = json.loads((ROOT / "overlay/proton-ntcontext/build.lock.json").read_text())
+        name = lock["build_name"]
+        tree = self.root / name
+        binaries = tree / "files/bin-arm64"
+        binaries.mkdir(parents=True)
+        for binary in ("wine", "wineserver"):
+            (binaries / binary).write_bytes(self.elf())
+            (binaries / binary).chmod(0o755)
+        (tree / "proton").write_text("#!/usr/bin/python3\n")
+        (tree / "proton").chmod(0o755)
+        (tree / "toolmanifest.vdf").write_text('"manifest" { "commandline" "/proton %verb%" }')
+        (tree / "compatibilitytool.vdf").write_text(
+            '"compatibilitytools" { "compat_tools" { "%s" { "install_path" "." } } }' % name)
+        # Exercise the publication fix, including its bin -> bin-arm64 symlinks,
+        # then the entire importer and upstream registration, rather than validate alone.
+        packaging["import_layout"](tree)
+        archive = self.root / (name + "-aarch64.tar.gz")
+        with tarfile.open(archive, "w:gz") as packed:
+            packed.add(tree, arcname=name)
+        directory = self.install(archive)
+        self.assertEqual(directory, "DDJP-" + name)
+        installed = self.tools / directory
+        self.assertTrue((installed / "files/bin/wine").is_symlink())
+        self.assertEqual((installed / "files/bin/wineserver").read_bytes(), self.elf())
+        self.assertIn("ddjp-import-" + name, self.compat["adopt_extras"](str(self.tools)))
+        self.assertIn('"$here/proton"', (installed / "droiddeck-proton-wrap").read_text())
+        HELPER["remove"](self.steam, directory)
+        self.assertEqual(list(self.tools.iterdir()), [])
+
 
 class ProtonImportOverlayTest(unittest.TestCase):
     def test_changed_upstream_is_rejected_before_creating_kotlin_or_assets(self):
@@ -228,3 +259,4 @@ class ProtonImportOverlayTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+

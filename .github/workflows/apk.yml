@@ -13,6 +13,7 @@ on:
       - 'overlay/build-cache/**'
       - 'overlay/low-memory/**'
       - 'overlay/suspend-survival/**'
+      - 'overlay/readable-toasts/**'
       - 'upstream.lock.json'
       - '.github/workflows/apk.yml'
   workflow_dispatch:
@@ -128,3 +129,4 @@ jobs:
         if: always()
         working-directory: ${{ github.workspace }}
         run: rm -rf source
+
