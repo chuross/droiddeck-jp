@@ -14,6 +14,7 @@ on:
       - 'overlay/low-memory/**'
       - 'overlay/suspend-survival/**'
       - 'overlay/readable-toasts/**'
+      - 'overlay/log-share/**'
       - 'upstream.lock.json'
       - '.github/workflows/apk.yml'
   workflow_dispatch:

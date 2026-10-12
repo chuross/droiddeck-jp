@@ -153,7 +153,9 @@ class PrepareTest(unittest.TestCase):
              patch.object(builder.PATCHES["suspend-survival"], "check"), \
              patch.object(builder.PATCHES["suspend-survival"], "apply"), \
              patch.object(builder.PATCHES["readable-toasts"], "check"), \
-             patch.object(builder.PATCHES["readable-toasts"], "apply"):
+             patch.object(builder.PATCHES["readable-toasts"], "apply"), \
+             patch.object(builder.PATCHES["log-share"], "check"), \
+             patch.object(builder.PATCHES["log-share"], "apply"):
             builder.overlay(self.source)
         for name, text in preserved.items():
             self.assertEqual((target / name).read_text(), text)

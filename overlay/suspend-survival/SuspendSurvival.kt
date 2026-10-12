@@ -83,6 +83,7 @@ internal object SuspendSurvival {
         }.onFailure { Log.w(TAG, "could not persist session process identity", it) }
     }
 
+    @Synchronized
     fun recoverExit(context: Context, dir: File) {
         runCatching {
             val report = JSONObject().put("capturedAt", System.currentTimeMillis())
@@ -123,7 +124,7 @@ internal object SuspendSurvival {
             writeJson(File(dir, "process-exit.json"), report)
             SessionEvents.record("session.process_exit_history", mapOf("outcome" to report.getString("outcome")), dir)
         }.onFailure {
-            Log.w(TAG, "could not recover process exit history", it)
+            runCatching { Log.w(TAG, "could not recover process exit history", it) }
             runCatching { writeJson(File(dir, "process-exit.json"),
                 JSONObject().put("outcome", "diagnostic_failed").put("error", it.javaClass.simpleName)) }
         }
@@ -147,12 +148,14 @@ internal object SuspendSurvival {
 
     private fun writeJson(file: File, value: JSONObject) {
         file.parentFile?.mkdirs()
-        val temporary = File(file.parentFile, file.name + ".tmp")
-        FileOutputStream(temporary).use {
-            it.write((LogRedactor.redact(value.toString()) + "\n").toByteArray(Charsets.UTF_8))
-            it.fd.sync()
-        }
-        check(temporary.renameTo(file)) { "could not publish diagnostic" }
+        val temporary = File.createTempFile(".diagnostic-", ".tmp", file.parentFile)
+        try {
+            FileOutputStream(temporary).use {
+                it.write((LogRedactor.redact(value.toString()) + "\n").toByteArray(Charsets.UTF_8))
+                it.fd.sync()
+            }
+            check(temporary.renameTo(file)) { "could not publish diagnostic" }
+        } finally { temporary.delete() }
     }
 
     internal data class Stat(val started: Long, val state: Char, val parent: Int)

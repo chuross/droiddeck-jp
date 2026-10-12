@@ -54,7 +54,7 @@ index 5f8f2bf..aa6c115 100644
              SessionState.firstFrameSeen = false
              SessionState.suspended = false
          }
-+        SuspendSurvival.remember(context, dir)
++        runCatching { SuspendSurvival.remember(context, dir) }
          record("session.created", mapOf("mode" to mode), dir)
      }
  
@@ -191,7 +191,7 @@ index 037e5a2..6b9d1d7 100644
          // One folder per session, claimed by whoever started first - the activity starts the
          // compositor before this service runs - so the compositor's log lands in the same place.
          val sessionDir = SessionPaths.beginOrCurrent(this)
-+        SuspendSurvival.remember(this, sessionDir)
++        runCatching { SuspendSurvival.remember(this, sessionDir) }
          val sessionLog = File(sessionDir, "session.log")
          SessionState.logFile = sessionLog
          SessionState.logDirectory = sessionDir
