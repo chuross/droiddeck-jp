@@ -90,16 +90,87 @@ class ProtonImportTest(unittest.TestCase):
                 HELPER["remove"](self.steam, directory)
                 self.assertTrue(archive.exists())
 
-    def test_existing_install_is_never_overwritten(self):
+    def test_reimport_updates_managed_build_and_preserves_tool_identity(self):
         archive = self.archive()
         directory = self.install(archive)
         sentinel = self.tools / directory / "keep"
         sentinel.write_text("old build")
-        with self.assertRaises(HELPER["ImportProblem"]) as error:
-            self.install(archive)
-        self.assertEqual(error.exception.code, "already_installed")
+        self.assertEqual(self.install(archive), directory)
+        self.assertFalse(sentinel.exists())
+        self.assertEqual(HELPER["import_metadata"](self.tools / directory)["directory"], directory)
+        self.assertEqual([p.name for p in self.tools.iterdir()], [directory])
+
+    def test_legacy_marker_import_is_recognized_removed_and_reimported(self):
+        archive = self.archive()
+        directory = self.install(archive)
+        tree = self.tools / directory
+        (tree / HELPER["MARKER"]).rename(tree / HELPER["LEGACY_MARKER"])
+        self.assertEqual(HELPER["import_metadata"](tree)["directory"], directory)
+        self.assertEqual(self.install(archive), directory)
+        self.assertTrue((tree / HELPER["MARKER"]).is_file())
+        (tree / HELPER["MARKER"]).rename(tree / HELPER["LEGACY_MARKER"])
+        HELPER["remove"](self.steam, directory)
+        self.assertEqual(list(self.tools.iterdir()), [])
+
+    def test_invalid_replacement_and_registration_failure_preserve_installed_build(self):
+        directory = self.install(self.archive())
+        tree = self.tools / directory
+        sentinel = tree / "keep"
+        sentinel.write_text("old build")
+        for broken in ("invalid", "registration"):
+            with self.subTest(broken=broken):
+                archive = self.archive(machine=62 if broken == "invalid" else 183)
+                with patch.dict(self.compat, adopt_extras=lambda path: {}):
+                    with self.assertRaises(HELPER["ImportProblem"]):
+                        self.install(archive)
+                self.assertEqual(sentinel.read_text(), "old build")
+                self.assertEqual(HELPER["import_metadata"](tree)["directory"], directory)
+                self.assertEqual([p.name for p in self.tools.iterdir()], [directory])
+
+    def test_failed_replacement_rename_rolls_back_original_build(self):
+        archive = self.archive()
+        directory = self.install(archive)
+        sentinel = self.tools / directory / "keep"
+        sentinel.write_text("old build")
+        original = Path.rename
+
+        def rename(path, target):
+            if path.parent.name.startswith(".ddjp-import-") and Path(target) == self.tools / directory:
+                raise OSError("simulated publish failure")
+            return original(path, target)
+
+        with patch.object(Path, "rename", rename):
+            with self.assertRaises(OSError):
+                self.install(archive)
         self.assertEqual(sentinel.read_text(), "old build")
         self.assertEqual([p.name for p in self.tools.iterdir()], [directory])
+
+    def test_reimport_does_not_replace_unmanaged_collision(self):
+        tree = self.tools / "DDJP-Test-Proton"
+        tree.mkdir()
+        (tree / "keep").write_text("unmanaged")
+        with self.assertRaises(HELPER["ImportProblem"]) as error:
+            self.install(self.archive())
+        self.assertEqual(error.exception.code, "already_installed")
+        self.assertEqual((tree / "keep").read_text(), "unmanaged")
+
+    def test_legacy_marker_removal_rejects_symlink_and_directory_mismatch(self):
+        directory = self.install(self.archive())
+        tree = self.tools / directory
+        marker = tree / HELPER["MARKER"]
+        legacy = tree / HELPER["LEGACY_MARKER"]
+        metadata = marker.read_text()
+        marker.unlink()
+        outside = self.root / "outside-marker"
+        outside.write_text(metadata)
+        legacy.symlink_to(outside)
+        with self.assertRaises(HELPER["ImportProblem"]):
+            HELPER["remove"](self.steam, directory)
+        legacy.unlink()
+        legacy.write_text(json.dumps({"directory": "DDJP-other"}))
+        with self.assertRaises(HELPER["ImportProblem"]):
+            HELPER["remove"](self.steam, directory)
+        self.assertTrue(tree.is_dir())
 
     def test_x86_64_and_incomplete_protons_are_rejected(self):
         self.assert_rejected(self.archive(machine=62), "not_arm64")
@@ -139,7 +210,7 @@ class ProtonImportTest(unittest.TestCase):
         self.assert_rejected(self.archive(extras=[("Test-Proton/link", tarfile.LNKTYPE, "../outside")]), "unsafe_archive")
 
     def test_prewrapped_manifest_and_import_markers_are_not_trusted(self):
-        for name in (HELPER["MARKER"], "toolmanifest.vdf.droiddeck-orig", "toolmanifest.vdf.bannerlator-orig"):
+        for name in (HELPER["MARKER"], HELPER["LEGACY_MARKER"], "toolmanifest.vdf.droiddeck-orig", "toolmanifest.vdf.bannerlator-orig"):
             with self.subTest(name=name):
                 self.assert_rejected(self.archive(extras=[("Test-Proton/" + name, tarfile.REGTYPE, b"untrusted")]), "invalid_proton")
 

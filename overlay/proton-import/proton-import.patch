@@ -163,7 +163,7 @@ index 3d333fe..2d7ca7a 100644
  <?xml version="1.0" encoding="utf-8"?>
  <resources>
 +    <string name="proton_import_title">ファイルからProtonを追加</string>
-+    <string name="proton_import_note">端末にダウンロードしたARM64版Proton（.tar.gz / .tar.xz）を選択します。</string>
++    <string name="proton_import_note">端末にダウンロードしたARM64版Proton（.tar.gz / .tar.xz）を選択します。同じProtonは上書き更新します。</string>
 +    <string name="proton_import_pick">ファイルを選択</string>
 +    <string name="proton_import_copying">Protonアーカイブをコピー中</string>
 +    <string name="proton_import_extracting">Protonを検証・展開中</string>
@@ -173,7 +173,7 @@ index 3d333fe..2d7ca7a 100644
 +    <string name="proton_import_no_space">Protonの導入に必要な空き容量がありません。空き容量を増やして再試行してください。</string>
 +    <string name="proton_import_invalid">アーカイブが破損しているか、安全に展開できないか、対応するProtonではありません。</string>
 +    <string name="proton_import_not_arm64">ARM64版のWineとwineserverが含まれていません。ARM64版Protonを選択してください。</string>
-+    <string name="proton_import_exists">同名のProtonが導入済みです。既存版を削除するか、別名のビルドを選択してください。</string>
++    <string name="proton_import_exists">同名のフォルダまたは別のProtonが存在します。管理対象を確認できないため上書きできません。</string>
 +    <string name="proton_import_read_failed">ファイルを読み込めませんでした。ダウンロードを完了してから再選択してください。</string>
 +    <string name="proton_import_failed">Protonを追加・削除できませんでした。アプリのログを確認してください。</string>
 +
@@ -188,7 +188,7 @@ index a240c5a..c44eb48 100644
  <?xml version="1.0" encoding="utf-8"?>
  <resources>
 +    <string name="proton_import_title">Add Proton from a file</string>
-+    <string name="proton_import_note">Select an ARM64 Proton .tar.gz or .tar.xz downloaded to this device.</string>
++    <string name="proton_import_note">Select an ARM64 Proton .tar.gz or .tar.xz downloaded to this device. Importing the same Proton updates it in place.</string>
 +    <string name="proton_import_pick">Choose file</string>
 +    <string name="proton_import_copying">Copying Proton archive</string>
 +    <string name="proton_import_extracting">Checking and unpacking Proton</string>
@@ -198,10 +198,11 @@ index a240c5a..c44eb48 100644
 +    <string name="proton_import_no_space">Not enough free space to import this Proton. Free some storage and try again.</string>
 +    <string name="proton_import_invalid">This archive is damaged, unsafe, or does not contain a supported Proton build.</string>
 +    <string name="proton_import_not_arm64">This Proton does not contain ARM64 Wine and wineserver. Select an ARM64 build.</string>
-+    <string name="proton_import_exists">A Proton with this import name is already installed. Remove it first or use a differently named build.</string>
++    <string name="proton_import_exists">A folder or another Proton already uses this name. It cannot be overwritten because it is not a recognized managed import.</string>
 +    <string name="proton_import_read_failed">Could not read the selected file. Download it completely and select it again.</string>
 +    <string name="proton_import_failed">Could not install or remove this Proton. See the app logs for details.</string>
 +
      <string name="app_name">DroidDeck</string>
      <string-array name="loading_hints">
          <item>First run downloads Steam. This may take a few minutes.</item>
+

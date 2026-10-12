@@ -15,6 +15,7 @@ object ProtonImport {
     const val BUSY_ID = "local-import"
     private const val PREFIX = "DDJP-"
     private const val MARKER = ".droiddeck-patch-import.json"
+    private const val LEGACY_MARKER = ".droiddeck-jp-import.json"
     private const val MAX_ARCHIVE = 4L * 1024 * 1024 * 1024
     private const val RESERVE = 256L * 1024 * 1024
     @Volatile var inProgress = false
@@ -29,13 +30,17 @@ object ProtonImport {
     fun installed(context: Context): List<Installed> = tools(context).listFiles().orEmpty()
         .filter { it.name.startsWith(PREFIX) && it.isDirectory && !java.nio.file.Files.isSymbolicLink(it.toPath()) }
         .mapNotNull { tree ->
-            try {
-                val marker = File(tree, MARKER)
-                if (java.nio.file.Files.isSymbolicLink(marker.toPath()) || marker.length() > 4096) return@mapNotNull null
-                val metadata = JSONObject(marker.readText())
-                if (metadata.optString("directory") != tree.name || !File(tree, "toolmanifest.vdf").isFile) null
-                else Installed(tree.name, metadata.getString("name"))
-            } catch (_: Exception) { null }
+            // Branding changed the marker filename; older imports retain their original marker.
+            listOf(MARKER, LEGACY_MARKER).firstNotNullOfOrNull { filename ->
+                try {
+                    val marker = File(tree, filename)
+                    if (java.nio.file.Files.isSymbolicLink(marker.toPath()) || !marker.isFile || marker.length() > 4096)
+                        return@firstNotNullOfOrNull null
+                    val metadata = JSONObject(marker.readText())
+                    if (metadata.optString("directory") != tree.name || !File(tree, "toolmanifest.vdf").isFile) null
+                    else Installed(tree.name, metadata.getString("name"))
+                } catch (_: Exception) { null }
+            }
         }.sortedBy { it.name }
 
     fun install(context: Context, uri: Uri, onProgress: (String, Int) -> Unit): String? =
@@ -157,3 +162,4 @@ object ProtonImport {
         return context.getString(message)
     }
 }
+

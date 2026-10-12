@@ -13,6 +13,7 @@ import tempfile
 
 PREFIX = "DDJP-"
 MARKER = ".droiddeck-patch-import.json"
+LEGACY_MARKER = ".droiddeck-jp-import.json"
 RESERVE = 256 * 1024 * 1024
 MAX_BYTES = 16 * 1024 * 1024 * 1024
 MAX_ENTRIES = 200000
@@ -135,7 +136,7 @@ def arm64_elf(path):
 
 
 def validate(tree):
-    for relative in (MARKER, "toolmanifest.vdf.droiddeck-orig", "toolmanifest.vdf.bannerlator-orig",
+    for relative in (MARKER, LEGACY_MARKER, "toolmanifest.vdf.droiddeck-orig", "toolmanifest.vdf.bannerlator-orig",
                      "droiddeck-proton-wrap", "bannerlator-proton-wrap"):
         if os.path.lexists(tree / relative):
             fail("invalid_proton")
@@ -167,7 +168,8 @@ def install(steam_root, tarball, compat=None):
             directory = PREFIX + root
             final = tools / directory
             if os.path.lexists(final):
-                fail("already_installed")
+                if final.is_symlink() or not final.is_dir() or import_metadata(final) is None:
+                    fail("already_installed")
             unpack(archive, entries, staging)
         tree = staging / root
         validate(tree)
@@ -180,7 +182,7 @@ def install(steam_root, tarball, compat=None):
             fail("invalid_proton")
         name = "ddjp-import-" + root
         for existing in tools.iterdir():
-            if existing.name.startswith("."):
+            if existing.name.startswith(".") or existing == final:
                 continue
             key = compat["first_key"](str(existing / "compatibilitytool.vdf"), ["compatibilitytools", "compat_tools"])
             if key == name:
@@ -193,20 +195,49 @@ def install(steam_root, tarball, compat=None):
         if adopted.get(name) != directory:
             fail("registration_failed")
         (tree / MARKER).write_text(json.dumps({"directory": directory, "name": root}) + "\n")
+        # Validate and register the replacement before touching the installed build.
+        # Keep a backup on the same filesystem until publication succeeds.
+        backup_folder = None
+        backup = None
         if os.path.lexists(final):
-            fail("already_installed")
-        tree.rename(final)
+            if final.is_symlink() or not final.is_dir() or import_metadata(final) is None:
+                fail("already_installed")
+            # Outside TemporaryDirectory: even failed rollback must not delete the old build.
+            backup_folder = Path(tempfile.mkdtemp(prefix=".ddjp-backup-", dir=tools))
+            backup = backup_folder / directory
+            final.rename(backup)
+        try:
+            tree.rename(final)
+        except BaseException:
+            if backup is not None and backup.exists():
+                backup.rename(final)
+                backup_folder.rmdir()
+            raise
+        if backup_folder is not None:
+            shutil.rmtree(backup_folder, ignore_errors=True)
     return directory
+
+
+def import_metadata(tree):
+    # Older DroidDeck JP imports must remain manageable after the branding rename.
+    for filename in (MARKER, LEGACY_MARKER):
+        marker = tree / filename
+        if marker.is_symlink() or not marker.is_file() or marker.stat().st_size > 4096:
+            continue
+        try:
+            metadata = json.loads(marker.read_text())
+            if isinstance(metadata, dict) and metadata.get("directory") == tree.name:
+                return metadata
+        except (ValueError, OSError):
+            continue
+    return None
 
 
 def remove(steam_root, directory):
     if not directory.startswith(PREFIX) or not NAME.fullmatch(directory[len(PREFIX):]):
         fail("invalid_proton")
     tree = Path(steam_root) / "compatibilitytools.d" / directory
-    marker = tree / MARKER
-    if tree.is_symlink() or not tree.is_dir() or marker.is_symlink() or not marker.is_file():
-        fail("invalid_proton")
-    if json.loads(marker.read_text()).get("directory") != directory:
+    if tree.is_symlink() or not tree.is_dir() or import_metadata(tree) is None:
         fail("invalid_proton")
     shutil.rmtree(tree)
 
@@ -230,3 +261,4 @@ def main(argv):
 
 if __name__ == "__main__":
     sys.exit(main(sys.argv[1:]))
+
