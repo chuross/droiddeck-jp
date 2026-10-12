@@ -1,4 +1,4 @@
-"""Build ARM64 Valve Experimental independently and attach it to the current DroidDeck release."""
+"""Patch a public PLOP ARM64 Experimental build and attach it to the current DroidDeck release."""
 import argparse
 import base64
 import hashlib
@@ -10,8 +10,9 @@ import subprocess
 import tempfile
 
 ROOT = Path(__file__).resolve().parent
-REPOSITORY = "ValveSoftware/Proton"
-TAG = re.compile(r"Proton-Experimental-([0-9]+\.[0-9]+)-([0-9a-f]{12})\Z")
+REPOSITORY = "loathingKernel/Proton"
+UPSTREAM = "ValveSoftware/Proton"
+TAG = re.compile(r"proton-plop-([0-9]+\.[0-9]+)-([0-9]{8})-arm64\Z")
 SHA = re.compile(r"[0-9a-f]{40}\Z")
 
 
@@ -34,10 +35,16 @@ def version(tag):
 
 
 def resolve_source(branch):
-    if not re.fullmatch(r"experimental_[0-9]+\.[0-9]+", branch):
+    if not re.fullmatch(r"plop-[0-9]+\.[0-9]+-[0-9]{8}", branch):
         raise RuntimeError("Unexpected Experimental branch")
     endpoint = "repos/" + REPOSITORY
-    ref = api(endpoint + "/git/ref/heads/" + branch)["object"]
+    ref = api(endpoint + "/git/ref/tags/" + branch)["object"]
+    for _ in range(5):
+        if ref["type"] == "commit":
+            break
+        if ref["type"] != "tag":
+            raise RuntimeError("Unexpected PLOP tag object")
+        ref = api(endpoint + "/git/tags/" + ref["sha"])["object"]
     if ref["type"] != "commit" or not SHA.fullmatch(ref["sha"]):
         raise RuntimeError("Cannot resolve exact Experimental commit")
     tree = api(endpoint + "/git/trees/" + ref["sha"])
@@ -67,15 +74,55 @@ def arm64_sdk(makefile):
 
 
 def candidate_lock(lock, upstream=None, resolve=resolve_source):
-    branch = lock["proton_branch"]
-    proton, wine, dxvk, sdk = resolve(branch)
+    if upstream is None:
+        raise RuntimeError("A published PLOP ARM64 release is required")
+    tag = upstream["tag_name"]
+    if not re.fullmatch(r"plop-[0-9]+\.[0-9]+-[0-9]{8}", tag):
+        raise RuntimeError("Unexpected PLOP release tag")
+    name = "proton-" + tag + "-arm64"
+    assets = [asset for asset in upstream.get("assets", []) if asset["name"] == name + ".tar.xz"]
+    if len(assets) != 1:
+        raise RuntimeError("Expected exactly one published ARM64 archive")
+    asset = assets[0]
+    url = "https://github.com/" + REPOSITORY + "/releases/download/" + tag + "/" + asset["name"]
+    digest = asset.get("digest") or ""
+    if asset["browser_download_url"] != url or not re.fullmatch(r"sha256:[0-9a-f]{64}", digest):
+        raise RuntimeError("Published ARM64 archive URL or SHA256 is unavailable")
+    proton, wine, dxvk, sdk = resolve(tag)
     if not all(SHA.fullmatch(value) for value in (proton, wine, dxvk)):
         raise RuntimeError("Invalid Experimental source commit")
-    name = "Proton-Experimental-" + branch.removeprefix("experimental_") + "-" + proton[:12]
+    upstream_commit = check_upstream(tag, wine, dxvk)
     return dict(proton_repository="https://github.com/" + REPOSITORY + ".git",
-                proton_branch=branch, proton_commit=proton, wine_commit=wine,
-                dxvk_commit=dxvk, base_name=name, build_name=name + "-droiddeck",
-                sdk_image=sdk)
+                proton_branch="experimental_" + tag.split("-")[1], source_tag=tag,
+                proton_commit=proton, wine_commit=wine, dxvk_commit=dxvk,
+                upstream_commit=upstream_commit, base_name=name, build_name=name + "-droiddeck",
+                sdk_image=sdk, base_sha256=digest[7:], base_archive=url)
+
+
+def check_upstream(tag, wine, dxvk):
+    upstream_tag = tag.replace("plop-", "experimental-", 1)
+    upstream_ref = api("repos/" + UPSTREAM + "/git/ref/tags/" + upstream_tag)["object"]
+    if upstream_ref["type"] != "commit" or not SHA.fullmatch(upstream_ref["sha"]):
+        raise RuntimeError("Cannot resolve Valve Experimental release")
+    upstream_tree = api("repos/" + UPSTREAM + "/git/trees/" + upstream_ref["sha"])
+    if upstream_tree.get("truncated"):
+        raise RuntimeError("Truncated Valve Experimental source tree")
+    for component, expected in (("wine", wine), ("dxvk", dxvk)):
+        matches = [entry for entry in upstream_tree["tree"] if entry["path"] == component
+                   and entry["type"] == "commit" and entry["mode"] == "160000"]
+        if len(matches) != 1 or matches[0]["sha"] != expected:
+            raise RuntimeError("PLOP " + component + " differs from Valve Experimental")
+    return upstream_ref["sha"]
+
+
+def latest_arm_release(releases):
+    usable = [item for item in releases if not item.get("draft") and not item.get("prerelease")
+              and item.get("published_at") and re.fullmatch(r"plop-[0-9]+\.[0-9]+-[0-9]{8}", item["tag_name"])
+              and any(asset["name"] == "proton-" + item["tag_name"] + "-arm64.tar.xz"
+                      for asset in item.get("assets", []))]
+    if not usable:
+        raise RuntimeError("No published PLOP ARM64 release")
+    return max(usable, key=lambda item: tuple(map(int, re.findall(r"[0-9]+", item["tag_name"]))))
 
 
 def source_identity(lock):
@@ -148,7 +195,9 @@ def plan(repository, event, output):
     lock = json.loads((ROOT / "build.lock.json").read_text())
     target = current_droiddeck_release(repository)
     existing = existing_release(repository, target["tag_name"])
-    result = make_plan(lock, None, event, existing, target_tag=target["tag_name"])
+    releases = api("repos/" + REPOSITORY + "/releases?per_page=100")
+    upstream = latest_arm_release(releases)
+    result = make_plan(lock, upstream, event, existing, target_tag=target["tag_name"])
     output.write_text(json.dumps(result, indent=2) + "\n")
     output.with_name("candidate-proton.lock.json").write_text(json.dumps(result["lock"], indent=2) + "\n")
     if os.environ.get("GITHUB_OUTPUT"):
@@ -197,6 +246,7 @@ def publish(repository, manager, plan, directory):
             name = asset["name"]
             if name not in names and (name in ("Proton-SHA256SUMS", "proton-build.json", "signal-arm64ec-disassembly.txt")
                     or re.fullmatch(r"GE-Proton[0-9]+-[0-9]+-(?:ntcontext-fix|droiddeck)-(?:aarch64\.tar\.gz|wine-source\.tar\.xz)", name)
+                    or re.fullmatch(r"proton-plop-[0-9]+\.[0-9]+-[0-9]{8}-arm64-droiddeck-(?:aarch64\.tar\.gz|wine-source\.tar\.xz)", name)
                     or re.fullmatch(r"Proton-Experimental-[0-9]+\.[0-9]+-[0-9a-f]{12}-droiddeck-(?:aarch64\.tar\.gz|wine-source\.tar\.xz)", name)):
                 run("gh", "release", "delete-asset", tag, name, "--repo", repository, "--yes")
 

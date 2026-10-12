@@ -360,7 +360,7 @@ class ExperimentalPackageTest(unittest.TestCase):
         self.lock = json.loads((ROOT / "build.lock.json").read_text())
         self.lock_path = self.task / "build.lock.json"
         self.lock_path.write_text(json.dumps(self.lock))
-        self.tree = self.task / "proton-build/redist"
+        self.tree = self.task / "base" / self.lock["base_name"]
         self.tree.mkdir(parents=True)
         for name in ("proton", "toolmanifest.vdf", "LICENSE"):
             (self.tree / name).write_text("upstream")
@@ -381,6 +381,15 @@ class ExperimentalPackageTest(unittest.TestCase):
         (self.task / "proton/LICENSE.proton").write_text("Valve license")
         (self.task / "dist").mkdir()
         (self.task / "dist" / (self.lock["build_name"] + "-wine-source.tar.xz")).write_bytes(b"source")
+        self.lock["base_version"] = "1790000000 experimental-11.0-20261001-arm64"
+        (self.tree / "version").write_text(self.lock["base_version"] + "\n")
+        (self.task / "proton/compatibilitytool.vdf.template").write_text('"##BUILD_NAME##" "##INTERNAL_TOOL_NAME##"')
+        (results / "ntdll.dll").write_bytes(synthetic_pe(export="NtGetContextThread", marker=b"patched"))
+        (results / "dxvk").mkdir()
+        (results / "dxvk/dxgi.dll").write_bytes(synthetic_pe(marker=b"patched"))
+        subprocess.run(["tar", "-cJf", str(self.task / "base.tar.xz"), "-C", str(self.task / "base"), self.lock["base_name"]], check=True)
+        self.lock["base_sha256"] = package.sha256(self.task / "base.tar.xz")
+        self.lock_path.write_text(json.dumps(self.lock))
         self.heads = [self.lock[key] + "\n" for key in ("proton_commit", "wine_commit", "dxvk_commit")]
 
     def invoke(self):
@@ -394,7 +403,7 @@ class ExperimentalPackageTest(unittest.TestCase):
             run.side_effect = execute
             package.package(self.task, "manager", self.lock_path)
 
-    def test_full_build_is_packaged_with_source_and_validated_arm64x(self):
+    def test_stock_dlls_are_replaced_with_source_and_validated_arm64x(self):
         self.invoke()
         packaged = self.task / "unpacked" / self.lock["build_name"]
         metadata = json.loads((packaged / "droiddeck-ntcontext-build.json").read_text())
@@ -404,6 +413,20 @@ class ExperimentalPackageTest(unittest.TestCase):
         self.assertEqual((packaged / "LICENSE.proton").read_text(), "Valve license")
         self.assertTrue((self.task / "dist" / release.asset_names(self.lock)[0]).is_file())
 
+    def test_base_checksum_mismatch_prevents_extraction(self):
+        self.lock["base_sha256"] = "0" * 64
+        self.lock_path.write_text(json.dumps(self.lock))
+        with self.assertRaisesRegex(ValueError, "checksum"):
+            self.invoke()
+        self.assertFalse((self.task / "unpacked").exists())
+
+    def test_mismatched_dll_exports_prevent_replacement(self):
+        (self.task / "results/ntdll.dll").write_bytes(synthetic_pe(export="Wrong"))
+        with self.assertRaisesRegex(ValueError, "interface"):
+            self.invoke()
+        stock = self.task / "unpacked" / self.lock["base_name"]
+        self.assertEqual(package.original_ntdll(stock).read_bytes(), package.original_ntdll(self.tree).read_bytes())
+
     def test_source_mismatch_prevents_packaging(self):
         self.heads[1] = "0" * 40
         with self.assertRaisesRegex(ValueError, "source commit"):
@@ -411,10 +434,11 @@ class ExperimentalPackageTest(unittest.TestCase):
         self.assertFalse((self.task / "unpacked").exists())
 
     def test_wrong_dxvk_architecture_prevents_packaging(self):
-        package.original_dxvk(self.tree).write_bytes(synthetic_pe(machine=0x8664))
+        (self.task / "results/dxvk/dxgi.dll").write_bytes(synthetic_pe(machine=0x8664))
         with self.assertRaisesRegex(ValueError, "architecture mismatch"):
             self.invoke()
-        self.assertFalse((self.task / "unpacked").exists())
+        self.assertEqual(package.original_ntdll(self.task / "unpacked" / self.lock["base_name"]).read_bytes(),
+                         package.original_ntdll(self.tree).read_bytes())
 
     def test_missing_patch_evidence_prevents_packaging(self):
         (self.task / "results/wine-patches.diff").write_text("")
@@ -422,11 +446,32 @@ class ExperimentalPackageTest(unittest.TestCase):
             self.invoke()
 
 
+class UpstreamMatchTest(unittest.TestCase):
+    def test_matching_sources_pass_and_changed_wine_is_rejected(self):
+        tree = {"tree": [
+            {"path": "wine", "mode": "160000", "type": "commit", "sha": "b" * 40},
+            {"path": "dxvk", "mode": "160000", "type": "commit", "sha": "d" * 40}]}
+        for wine, passes in (("b" * 40, True), ("c" * 40, False)):
+            with patch.object(release, "api", side_effect=[
+                    {"object": {"type": "commit", "sha": "a" * 40}}, tree]):
+                if passes:
+                    self.assertEqual(release.check_upstream("plop-11.0-20261001", wine, "d" * 40), "a" * 40)
+                else:
+                    with self.assertRaisesRegex(RuntimeError, "differs"):
+                        release.check_upstream("plop-11.0-20261001", wine, "d" * 40)
+
+
 class ExperimentalReleaseTest(unittest.TestCase):
     def setUp(self):
         self.lock = json.loads((ROOT / "build.lock.json").read_text())
         self.resolve = Mock(return_value=("a" * 40, "b" * 40, "d" * 40, self.lock["sdk_image"]))
-        self.upstream = self.ge_release()
+        self.upstream = {"tag_name": "plop-11.0-20261001", "published_at": "2026-10-01",
+                         "assets": [{"name": "proton-plop-11.0-20261001-arm64.tar.xz",
+                                     "digest": "sha256:" + "c" * 64,
+                                     "browser_download_url": "https://github.com/loathingKernel/Proton/releases/download/plop-11.0-20261001/proton-plop-11.0-20261001-arm64.tar.xz"}]}
+        checker = patch.object(release, "check_upstream", return_value="e" * 40)
+        checker.start()
+        self.addCleanup(checker.stop)
 
     def ge_release(self):
         return None
@@ -445,8 +490,9 @@ class ExperimentalReleaseTest(unittest.TestCase):
         self.assertEqual(plan["lock"]["proton_commit"], "a" * 40)
         self.assertEqual(plan["lock"]["wine_commit"], "b" * 40)
         self.assertEqual(plan["lock"]["dxvk_commit"], "d" * 40)
-        self.assertNotIn("base_archive", plan["lock"])
-        self.resolve.assert_called_once_with("experimental_11.0")
+        self.assertIn("loathingKernel/Proton", plan["lock"]["base_archive"])
+        self.resolve.assert_called_once_with("plop-11.0-20261001")
+        self.assertEqual(plan["lock"]["base_sha256"], "c" * 64)
 
     def test_unchanged_complete_release_skips_and_manual_rebuilds(self):
         plan = self.plan()
@@ -477,6 +523,12 @@ class ExperimentalReleaseTest(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "commit"):
             self.plan()
 
+    def test_missing_binary_digest_is_rejected(self):
+        self.upstream["assets"][0]["digest"] = None
+        with self.assertRaisesRegex(RuntimeError, "SHA256"):
+            self.plan()
+        self.resolve.assert_not_called()
+
     def test_resolve_branch_uses_wine_submodule_and_arm_sdk_at_exact_commit(self):
         makefile = ("else ifeq ($(TARGET_ARCH),arm64)\n"
                     "\tSTEAMRT_IMAGE ?= " + self.lock["sdk_image"] + "\nendif\n")
@@ -484,7 +536,7 @@ class ExperimentalReleaseTest(unittest.TestCase):
                      {"tree": [{"path": "wine", "mode": "160000", "type": "commit", "sha": "b" * 40}, {"path": "dxvk", "mode": "160000", "type": "commit", "sha": "d" * 40}]},
                      {"content": base64.b64encode(makefile.encode()).decode()}]
         with patch.object(release, "api", side_effect=responses) as api:
-            self.assertEqual(release.resolve_source("experimental_11.0"),
+            self.assertEqual(release.resolve_source("plop-11.0-20261001"),
                              ("a" * 40, "b" * 40, "d" * 40, self.lock["sdk_image"]))
         self.assertTrue(api.call_args_list[-1].args[0].endswith("?ref=" + "a" * 40))
         with self.assertRaises(RuntimeError):
@@ -497,7 +549,7 @@ class ExperimentalReleaseTest(unittest.TestCase):
             with patch.object(release, "api", side_effect=[
                     {"object": {"type": "commit", "sha": "a" * 40}}, tree]):
                 with self.assertRaisesRegex(RuntimeError, "submodule"):
-                    release.resolve_source("experimental_11.0")
+                    release.resolve_source("plop-11.0-20261001")
 
     def prepare_assets(self, directory, plan):
         for name in release.asset_names(plan["lock"]) + [plan["lock"]["build_name"] + "-wine-source.tar.xz"]:

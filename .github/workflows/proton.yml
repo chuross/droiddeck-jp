@@ -19,7 +19,7 @@ jobs:
   build:
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04-arm
-    timeout-minutes: 360
+    timeout-minutes: 120
     permissions:
       contents: write
     env:
@@ -34,7 +34,7 @@ jobs:
           python-version: '3.12'
       - name: Helper and automation tests
         run: python3 -m unittest discover -s tests -v
-      - name: Resolve Valve Experimental ARM64 source
+      - name: Resolve public PLOP build and matching Experimental sources
         id: plan
         run: >-
           python3 overlay/proton-ntcontext/release.py plan
@@ -52,7 +52,7 @@ jobs:
           sudo apt-get install -y git make rsync curl patch autoconf automake libtool nasm meson ninja-build cmake
           docker info
           df -h "$GITHUB_WORKSPACE"
-      - name: Build patched Valve Experimental ARM64 Proton
+      - name: Rebuild ntdll and DXGI and replace stock DLLs
         if: steps.plan.outputs.build == 'true'
         run: bash overlay/proton-ntcontext/build.sh candidate-proton.lock.json
       - name: Attach Proton to current DroidDeck Release and record built Experimental commit
@@ -70,8 +70,8 @@ jobs:
             build/proton-ntcontext/dist/proton-build.json
             build/proton-ntcontext/dist/SHA256SUMS
             build/proton-ntcontext/results/
-            build/proton-ntcontext/proton-build/**/config.log
-            build/proton-ntcontext/proton-build/**/meson-logs/
+            build/proton-ntcontext/wine-build/config.log
+            build/proton-ntcontext/dxvk-build/meson-logs/
             build/proton-ntcontext/sdk-digests.json
           if-no-files-found: ignore
       - name: Remove temporary build source

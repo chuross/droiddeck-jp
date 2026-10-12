@@ -1,10 +1,14 @@
 {
-  "proton_repository": "https://github.com/ValveSoftware/Proton.git",
+  "proton_repository": "https://github.com/loathingKernel/Proton.git",
   "proton_branch": "experimental_11.0",
-  "proton_commit": "70b7e109e8fc0783a509805f3d1bc090b55dac3f",
+  "proton_commit": "1493ff87626056950f24c49227522b8b66e3bfce",
   "wine_commit": "6d211aabd1d325c9990a5fd7a81b9db37caae12d",
   "dxvk_commit": "685301564ea3486a7098bd37194020da84299617",
-  "base_name": "Proton-Experimental-11.0-70b7e109e8fc",
-  "build_name": "Proton-Experimental-11.0-70b7e109e8fc-droiddeck",
-  "sdk_image": "registry.gitlab.steamos.cloud/proton/steamrt4/sdk/arm64-llvm:4.0.20260714.251823-0"
+  "base_name": "proton-plop-11.0-20261001-arm64",
+  "build_name": "proton-plop-11.0-20261001-arm64-droiddeck",
+  "sdk_image": "registry.gitlab.steamos.cloud/proton/steamrt4/sdk/arm64-llvm:4.0.20260714.251823-0",
+  "source_tag": "plop-11.0-20261001",
+  "base_archive": "https://github.com/loathingKernel/Proton/releases/download/plop-11.0-20261001/proton-plop-11.0-20261001-arm64.tar.xz",
+  "base_sha256": "647eda5d9af79865275e4e653fc1f5f1b8f29737ac786f5cc3a46dad6254aae4",
+  "upstream_commit": "70b7e109e8fc0783a509805f3d1bc090b55dac3f"
 }

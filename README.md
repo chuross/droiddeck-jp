@@ -6,7 +6,7 @@
 - [Protonファイル導入](overlay/proton-import/): ファイル選択でARM64版Protonを追加・削除。
 - [Low Memoryモード](overlay/low-memory/): DXVK DXGI申告メモリ・QueryVideoMemoryInfo Budget cap。
 
-- [ARM64 Proton修正](overlay/proton-ntcontext/): Valve ExperimentalのNULL修正とDXGI Budget cap。
+- [ARM64 Proton修正](overlay/proton-ntcontext/): ExperimentalベースPLOPのNULL修正とDXGI Budget cap。
 - [ビルドキャッシュ](overlay/build-cache/): 検証済み依存ソースを再利用してAPKビルドを短縮。
 
 
