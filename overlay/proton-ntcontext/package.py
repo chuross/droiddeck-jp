@@ -235,10 +235,12 @@ def package(task, manager, lock_path=None):
     packaged = staging / lock["build_name"]
     tree.rename(packaged)
     importer = import_layout(packaged)
-    subprocess.run(["tar", "-czf", str(dist / (lock["build_name"] + "-aarch64.tar.gz")),
+    archive_name = runpy.run_path(str(ROOT / "asset_name.py"))["archive_name"](lock)
+    archive_path = dist / archive_name
+    subprocess.run(["tar", "-czf", str(archive_path),
                     "-C", str(staging), lock["build_name"]], check=True)
     # Apply the shipping APK's archive policy before the binary is published.
-    with tarfile.open(dist / (lock["build_name"] + "-aarch64.tar.gz"), "r:gz") as archive:
+    with tarfile.open(archive_path, "r:gz") as archive:
         entries, _ = importer["plan"](archive, 32 * 1024 ** 3)
         for member, path in entries:
             if member.issym():
@@ -252,4 +254,5 @@ if __name__ == "__main__":
     parser.add_argument("--lock", type=Path)
     args = parser.parse_args()
     package(args.task.resolve(), args.manager, args.lock)
+
 

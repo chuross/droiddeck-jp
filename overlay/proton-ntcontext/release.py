@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import re
+import runpy
 import subprocess
 import tempfile
 
@@ -137,8 +138,7 @@ def source_identity(lock):
 
 
 def asset_names(lock):
-    name = lock["build_name"]
-    return [name + "-aarch64.tar.gz"]
+    return [runpy.run_path(str(ROOT / "asset_name.py"))["archive_name"](lock)]
 
 
 def existing_release(repository, tag):
@@ -247,6 +247,7 @@ def publish(repository, manager, plan, directory):
             if name not in names and (name in ("Proton-SHA256SUMS", "proton-build.json", "signal-arm64ec-disassembly.txt")
                     or re.fullmatch(r"GE-Proton[0-9]+-[0-9]+-(?:ntcontext-fix|droiddeck)-(?:aarch64\.tar\.gz|wine-source\.tar\.xz)", name)
                     or re.fullmatch(r"proton-plop-[0-9]+\.[0-9]+-[0-9]{8}-arm64-droiddeck-(?:aarch64\.tar\.gz|wine-source\.tar\.xz)", name)
+                    or re.fullmatch(r"proton-plop-[0-9]+\.[0-9]+-droiddeck-arm64\.tar\.gz", name)
                     or re.fullmatch(r"Proton-Experimental-[0-9]+\.[0-9]+-[0-9a-f]{12}-droiddeck-(?:aarch64\.tar\.gz|wine-source\.tar\.xz)", name)):
                 run("gh", "release", "delete-asset", tag, name, "--repo", repository, "--yes")
 
@@ -296,4 +297,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 

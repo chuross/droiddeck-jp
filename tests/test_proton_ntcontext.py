@@ -423,6 +423,10 @@ class ExperimentalPackageTest(unittest.TestCase):
         self.assertTrue((packaged / "droiddeck-source/source.tar.xz").is_file())
         self.assertEqual((packaged / "LICENSE.proton").read_text(), "Valve license")
         self.assertTrue((self.task / "dist" / release.asset_names(self.lock)[0]).is_file())
+        self.assertEqual(release.asset_names(self.lock), ["proton-plop-11.0-droiddeck-arm64.tar.gz"])
+        updated = dict(self.lock, build_name="proton-plop-11.0-20261012-arm64-droiddeck")
+        self.assertEqual(release.asset_names(updated), release.asset_names(self.lock))
+        self.assertIn("20261001", metadata["build_name"])
         self.assertEqual((packaged / "files/bin/wine").read_bytes(),
                          (packaged / "files/bin-arm64/wine").read_bytes())
         importer["validate"](packaged)
@@ -584,6 +588,9 @@ class ExperimentalReleaseTest(unittest.TestCase):
                                {"name": "GE-Proton11-7-droiddeck-wine-source.tar.xz"},
                                {"name": "Proton-SHA256SUMS"}, {"name": "proton-build.json"},
                                {"name": "signal-arm64ec-disassembly.txt"}]}
+        dated = self.lock["build_name"] + "-aarch64.tar.gz"
+        older_version = "proton-plop-10.0-droiddeck-arm64.tar.gz"
+        existing["assets"].extend([{"name": dated}, {"name": older_version}])
         with tempfile.TemporaryDirectory() as temporary:
             directory = Path(temporary)
             self.prepare_assets(directory, plan)
@@ -596,7 +603,9 @@ class ExperimentalReleaseTest(unittest.TestCase):
                     patch.object(release, "run", side_effect=invoke) as run:
                 release.publish("owner/repo", "e" * 40, plan, directory)
         calls = [call.args for call in run.call_args_list]
-        self.assertEqual([args[2] for args in calls], ["upload", "edit"] + ["delete-asset"] * 5)
+        self.assertEqual([args[2] for args in calls], ["upload", "edit"] + ["delete-asset"] * 7)
+        self.assertTrue(any(dated in args for args in calls[2:]))
+        self.assertTrue(any(older_version in args for args in calls[2:]))
         self.assertTrue(all("0.3.2" in args for args in calls))
         self.assertIn("--clobber", calls[0])
         self.assertEqual(calls[0][6:], (str(directory / release.asset_names(plan["lock"])[0]), "--clobber"))
@@ -695,4 +704,5 @@ class ExperimentalReleaseTest(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
 

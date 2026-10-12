@@ -1,6 +1,12 @@
 name: Build and publish ARM64 Proton DroidDeck patches
 
 on:
+  push:
+    branches: [main]
+    paths:
+      - 'overlay/proton-ntcontext/**'
+      - 'tests/test_proton_ntcontext.py'
+      - '.github/workflows/proton.yml'
   workflow_run:
     workflows: ['Build and publish DroidDeck Patch APK']
     types: [completed]
@@ -83,4 +89,5 @@ jobs:
       - name: Remove temporary build source
         if: always()
         run: rm -rf build/proton-ntcontext
+
 
