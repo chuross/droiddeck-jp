@@ -198,11 +198,11 @@ class ProtonImportTest(unittest.TestCase):
         self.assertEqual(list(self.tools.iterdir()), [])
 
 
-@unittest.skipUnless(os.environ.get("DROIDDECK_JP_SOURCE"), "set DROIDDECK_JP_SOURCE to a prepared checkout")
+@unittest.skipUnless(os.environ.get("DROIDDECK_PATCH_SOURCE"), "set DROIDDECK_PATCH_SOURCE to a prepared checkout")
 class ProtonImportIntegrationTest(ProtonImportTest):
     def setUp(self):
         super().setUp()
-        source = Path(os.environ["DROIDDECK_JP_SOURCE"])
+        source = Path(os.environ["DROIDDECK_PATCH_SOURCE"])
         self.compat = runpy.run_path(str(source / "tools/linuxfs/overlay/usr/local/bin/steam-compatibility"))
 
     def test_import_uses_real_android_wrapper_and_keeps_original_entry_point(self):

@@ -577,7 +577,7 @@ class ExperimentalReleaseTest(unittest.TestCase):
     def test_publish_overwrites_proton_on_apk_release_preserving_apk_notes_and_status(self):
         plan = self.plan()
         existing = {"isDraft": False, "body": "- 本家リリース: 0.3.2\n- 本家コミット: commit\nAPK SHA-256: digest\n<!-- jp-source: " + "a" * 64 + " -->\n<!-- proton:start -->\nold description\n<!-- proton:end -->",
-                    "assets": [{"name": "DroidDeck-JP.apk"}, {"name": "SHA256SUMS"},
+                    "assets": [{"name": "DroidDeck-Patch.apk"}, {"name": "SHA256SUMS"},
                                {"name": "GE-Proton11-7-droiddeck-aarch64.tar.gz"},
                                {"name": "GE-Proton11-7-droiddeck-wine-source.tar.xz"},
                                {"name": "Proton-SHA256SUMS"}, {"name": "proton-build.json"},
@@ -604,13 +604,13 @@ class ExperimentalReleaseTest(unittest.TestCase):
         self.assertNotIn("old description", notes[0])
         self.assertNotIn("ProtonGE:", notes[0])
         self.assertIn(plan["source_marker"], notes[0])
-        self.assertFalse(any(arg.endswith("/DroidDeck-JP.apk") or arg.endswith("/SHA256SUMS") for arg in calls[0]))
+        self.assertFalse(any(arg.endswith("/DroidDeck-Patch.apk") or arg.endswith("/SHA256SUMS") for arg in calls[0]))
 
     def test_current_release_selects_latest_published_apk_and_never_proton_release(self):
-        releases = [{"tag_name": "0.3.2", "published_at": "2026-10-08", "assets": [{"name": "DroidDeck-JP.apk"}]},
-                    {"tag_name": "0.3.3", "published_at": "2026-10-09", "assets": [{"name": "DroidDeck-JP.apk"}]},
+        releases = [{"tag_name": "0.3.2", "published_at": "2026-10-08", "assets": [{"name": "DroidDeck-Patch.apk"}]},
+                    {"tag_name": "0.3.3", "published_at": "2026-10-09", "assets": [{"name": "DroidDeck-Patch.apk"}]},
                     {"tag_name": "GE-Proton11-8", "published_at": "2026-10-10", "assets": [{"name": "proton.tar.gz"}]},
-                    {"tag_name": "0.3.4", "published_at": "2026-10-11", "draft": True, "assets": [{"name": "DroidDeck-JP.apk"}]}]
+                    {"tag_name": "0.3.4", "published_at": "2026-10-11", "draft": True, "assets": [{"name": "DroidDeck-Patch.apk"}]}]
         with patch.object(release, "api", return_value=releases):
             self.assertEqual(release.current_droiddeck_release("owner/repo")["tag_name"], "0.3.3")
         with patch.object(release, "api", return_value=[]):
@@ -660,7 +660,7 @@ class ExperimentalReleaseTest(unittest.TestCase):
             directory = Path(temporary)
             self.prepare_assets(directory, plan)
             with patch.object(release, "current_droiddeck_release", return_value={"tag_name": "0.3.2"}), \
-                    patch.object(release, "existing_release", return_value={"isDraft": False, "body": "- 本家リリース: 0.3.2\n- 本家コミット: commit\nAPK SHA-256: digest", "assets": [{"name": "DroidDeck-JP.apk"}]}), \
+                    patch.object(release, "existing_release", return_value={"isDraft": False, "body": "- 本家リリース: 0.3.2\n- 本家コミット: commit\nAPK SHA-256: digest", "assets": [{"name": "DroidDeck-Patch.apk"}]}), \
                     patch.object(release, "run", side_effect=RuntimeError("upload failed")) as run:
                 with self.assertRaisesRegex(RuntimeError, "upload failed"):
                     release.publish("owner/repo", "e" * 40, plan, directory)

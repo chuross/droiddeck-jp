@@ -48,7 +48,7 @@ def bundle_fonts(source):
             if not member.isfile() or member.size > 32 * 1024 * 1024:
                 raise RuntimeError("Invalid IPAMona font archive member: " + filename)
             files[filename] = packed.extractfile(member).read()
-    target = source / "tools/linuxfs/overlay/usr/local/share/fonts/droiddeck-jp"
+    target = source / "tools/linuxfs/overlay/usr/local/share/fonts/droiddeck-patch"
     target.mkdir(parents=True, exist_ok=True)
     for filename, content in files.items():
         (target / filename).write_bytes(content)
@@ -64,9 +64,9 @@ def bundle_fonts(source):
     candidates = [i for i, line in enumerate(lines) if re.match(r'^\s*\./gradlew\s+"\$\{gradle_task\}"(?:\s|$)', line)]
     if len(candidates) != 1:
         raise RuntimeError("Gradle packaging changed; review bundled font integration")
-    lines.insert(candidates[0], '''mkdir -p "${linuxfs_dir}/usr/local/share/fonts/droiddeck-jp"
-install -m644 "${repo_root}/tools/linuxfs/overlay/usr/local/share/fonts/droiddeck-jp/"* \\
-    "${linuxfs_dir}/usr/local/share/fonts/droiddeck-jp/"
+    lines.insert(candidates[0], '''mkdir -p "${linuxfs_dir}/usr/local/share/fonts/droiddeck-patch"
+install -m644 "${repo_root}/tools/linuxfs/overlay/usr/local/share/fonts/droiddeck-patch/"* \\
+    "${linuxfs_dir}/usr/local/share/fonts/droiddeck-patch/"
 ''')
     script.write_text("".join(lines))
 
@@ -80,7 +80,7 @@ def patch_game_fonts(source):
         raise RuntimeError("droiddeck-game-env changed; review the integration")
     text = text.replace(hook, """    def jp_fonts(command, environment):
         try:
-            fonts = runpy.run_path(str(Path(__file__).resolve().parent / "droiddeck-jp-fonts"))
+            fonts = runpy.run_path(str(Path(__file__).resolve().parent / "droiddeck-patch-fonts"))
             fonts["prepare"](command, environment)
         except Exception as error:
             print("droiddeck-game-env: Japanese fonts: %s" % error, file=sys.stderr)
@@ -92,9 +92,9 @@ def patch_game_fonts(source):
     text = text.replace(fallback, fallback + "\n            jp_fonts(launch, launch_env)")
     script.write_text(text)
 
-HELPERS = ("droiddeck-jp-fonts",)
+HELPERS = ("droiddeck-patch-fonts",)
 ASSETS = tuple("usr/local/bin/" + name for name in HELPERS) + tuple(
-    "usr/local/share/fonts/droiddeck-jp/" + name
+    "usr/local/share/fonts/droiddeck-patch/" + name
     for name in (*IPAMONA_FILES, IPAMONA_PACKAGE + ".tar.gz")
 )
 

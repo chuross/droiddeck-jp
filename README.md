@@ -1,4 +1,4 @@
-# DroidDeck JP
+# DroidDeck Patch
 
 - [日本語化](overlay/japanese-fonts/): Protonへ日本語フォントを追加。
 - [Protonログ出力先](overlay/proton-logs/): Protonログを現在のセッションのログフォルダへ保存。

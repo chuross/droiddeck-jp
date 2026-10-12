@@ -7,7 +7,7 @@ import tempfile
 import unittest
 from unittest.mock import Mock, patch
 
-SOURCE = os.environ.get("DROIDDECK_JP_SOURCE")
+SOURCE = os.environ.get("DROIDDECK_PATCH_SOURCE")
 LOW_MEMORY = runpy.run_path(str(Path(__file__).resolve().parents[1] / "overlay/low-memory/droiddeck-low-memory"))
 
 
@@ -15,7 +15,7 @@ class Finished(BaseException):
     pass
 
 
-@unittest.skipUnless(SOURCE, "set DROIDDECK_JP_SOURCE to a prepared checkout")
+@unittest.skipUnless(SOURCE, "set DROIDDECK_PATCH_SOURCE to a prepared checkout")
 class LaunchIntegrationTest(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -167,7 +167,7 @@ class LaunchIntegrationTest(unittest.TestCase):
                 environment = dict(os.environ, **self.env, HOME=str(self.root),
                                    BL_DEBUG_DIR=str(directory), PROTON_LOG=flag,
                                    PROTON_LOG_DIR=str(self.root / "stale session"),
-                                   DROIDDECK_JP_FONTS="0")
+                                   DROIDDECK_PATCH_FONTS="0")
                 subprocess.run([sys.executable, str(script), str(proton), "waitforexitandrun", "game.exe"],
                                env=environment, check=True, capture_output=True)
                 log = directory / "steam-123.log"

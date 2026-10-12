@@ -120,7 +120,7 @@ class PublishTest(unittest.TestCase):
         remote = patch.object(publisher, "api", return_value={"sha": self.target, "private": True})
         remote.start()
         self.addCleanup(remote.stop)
-        for name in ("DroidDeck-JP.apk", "DroidDeck-JP-source.tar.gz", "SHA256SUMS"):
+        for name in ("DroidDeck-Patch.apk", "DroidDeck-Patch-source.tar.gz", "SHA256SUMS"):
             (self.directory / name).write_bytes(b"fixture")
         (self.directory / "jp-build.json").write_text(json.dumps(
             {"upstream": "a" * 40, "manager": self.manager,
@@ -164,7 +164,7 @@ class PublishTest(unittest.TestCase):
         self.assertIn("--clobber", commands[2])
         self.assertEqual(invoke.call_count, 4)
         self.assertNotIn(str(self.directory / "jp-build.json"), commands[2])
-        self.assertNotIn(str(self.directory / "DroidDeck-JP-source.tar.gz"), commands[2])
+        self.assertNotIn(str(self.directory / "DroidDeck-Patch-source.tar.gz"), commands[2])
         self.assertIn(str(self.directory / "SHA256SUMS"), commands[2])
         self.assertNotIn("source.tar.gz", (self.directory / "SHA256SUMS").read_text())
         self.assertIn("--draft=false", commands[3])
@@ -205,15 +205,15 @@ class PublishTest(unittest.TestCase):
         self.assertNotIn(self.manager, commands[1])
         for command in commands:
             self.assertIn("owner/public-downloads", command)
-        self.assertEqual(commands[2][6:], (str(self.directory / "DroidDeck-JP.apk"), str(self.directory / "SHA256SUMS"), "--clobber"))
+        self.assertEqual(commands[2][6:], (str(self.directory / "DroidDeck-Patch.apk"), str(self.directory / "SHA256SUMS"), "--clobber"))
 
     def test_public_release_does_not_require_source_archive(self):
-        (self.directory / "DroidDeck-JP-source.tar.gz").unlink()
+        (self.directory / "DroidDeck-Patch-source.tar.gz").unlink()
         (self.directory / "SHA256SUMS").unlink()
         with patch.object(publisher, "run", return_value=self.result(out='{"isDraft": true}')) as invoke:
             publisher.publish("owner/public-downloads", self.manager, self.plan, self.directory)
         commands = [call.args for call in invoke.call_args_list]
-        self.assertIn(str(self.directory / "DroidDeck-JP.apk"), commands[1])
+        self.assertIn(str(self.directory / "DroidDeck-Patch.apk"), commands[1])
 
     def test_main_publishes_only_to_distribution_repository(self):
         plan_path = self.directory / "plan.json"
@@ -255,13 +255,13 @@ class PublishTest(unittest.TestCase):
         with patch.object(publisher, "api", side_effect=[
                 {"sha": self.target}]), \
                 patch.object(publisher, "run", return_value=self.result(out=json.dumps({"isDraft": False,
-                    "assets": [{"name": "DroidDeck-JP-source.tar.gz"}, {"name": "jp-build.json"},
-                               {"name": "DroidDeck-JP.apk"}, {"name": "SHA256SUMS"}]}))) as invoke:
+                    "assets": [{"name": "DroidDeck-Patch-source.tar.gz"}, {"name": "jp-build.json"},
+                               {"name": "DroidDeck-Patch.apk"}, {"name": "SHA256SUMS"}]}))) as invoke:
             publisher.publish("owner/private", self.manager, self.plan, self.directory)
         commands = [call.args for call in invoke.call_args_list]
         self.assertEqual(commands[2][2], "upload")
         self.assertEqual([command[4] for command in commands[3:5]],
-                         ["DroidDeck-JP-source.tar.gz", "jp-build.json"])
+                         ["DroidDeck-Patch-source.tar.gz", "jp-build.json"])
         self.assertTrue(all(command[2] == "delete-asset" for command in commands[3:5]))
         self.assertIn("--draft=false", commands[-1])
 

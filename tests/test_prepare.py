@@ -61,7 +61,7 @@ class PrepareTest(unittest.TestCase):
     def test_bundle_fonts_and_complete_distribution_are_installed_before_packaging(self):
         archive = self.font_archive()
         script = self.bundle(archive, hashlib.sha256(archive).hexdigest())
-        target = self.source / "tools/linuxfs/overlay/usr/local/share/fonts/droiddeck-jp"
+        target = self.source / "tools/linuxfs/overlay/usr/local/share/fonts/droiddeck-patch"
         for name in fonts.IPAMONA_FILES:
             self.assertEqual((target / name).read_bytes(), name.encode())
         self.assertEqual((target / (fonts.IPAMONA_PACKAGE + ".tar.gz")).read_bytes(), archive)
@@ -98,11 +98,11 @@ class PrepareTest(unittest.TestCase):
         file.write_text('        val files = arrayOf(\n        )\n')
         builder.stage_overlay_assets(self.source)
         text = file.read_text()
-        self.assertIn('"usr/local/bin/droiddeck-jp-fonts" to "usr/local/bin/droiddeck-jp-fonts"', text)
+        self.assertIn('"usr/local/bin/droiddeck-patch-fonts" to "usr/local/bin/droiddeck-patch-fonts"', text)
         for helper in tuple(helper for module in builder.PATCHES.values() for helper in getattr(module, "HELPERS", ())):
             self.assertEqual(text.count('"usr/local/bin/' + helper + '" to'), 1)
         for name in (*fonts.IPAMONA_FILES, fonts.IPAMONA_PACKAGE + ".tar.gz"):
-            path = "usr/local/share/fonts/droiddeck-jp/" + name
+            path = "usr/local/share/fonts/droiddeck-patch/" + name
             self.assertIn('"%s" to "%s"' % (path, path), text)
 
     def test_changed_runtime_staging_fails_instead_of_shipping_unapplied_fix(self):
@@ -155,9 +155,9 @@ class PrepareTest(unittest.TestCase):
             builder.overlay(self.source)
         for name, text in preserved.items():
             self.assertEqual((target / name).read_text(), text)
-        self.assertEqual((target / "droiddeck-jp-fonts").read_bytes(),
-                         (ROOT / "overlay/japanese-fonts/droiddeck-jp-fonts").read_bytes())
-        self.assertTrue((target / "droiddeck-jp-fonts").stat().st_mode & 0o111)
+        self.assertEqual((target / "droiddeck-patch-fonts").read_bytes(),
+                         (ROOT / "overlay/japanese-fonts/droiddeck-patch-fonts").read_bytes())
+        self.assertTrue((target / "droiddeck-patch-fonts").stat().st_mode & 0o111)
         self.assertEqual((target / "droiddeck-game-env").read_text().count('jp_fonts(launch, launch_env)'), 2)
         self.assertIn('applicationId "com.droiddeck.launcher.japanese"',
                       (self.source / "app/build.gradle").read_text())
@@ -180,7 +180,7 @@ class PrepareTest(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "Steam diagnostics launch hook changed"):
                 builder.overlay(self.source)
         bundled.assert_not_called()
-        self.assertFalse((script.parent / "droiddeck-jp-fonts").exists())
+        self.assertFalse((script.parent / "droiddeck-patch-fonts").exists())
 
 
 if __name__ == "__main__":

@@ -69,7 +69,7 @@ def patch_app_identity(source):
     for strings in (source / "app/src/main/res").glob("values*/strings.xml"):
         text = strings.read_text()
         text = re.sub(r'(<string name="app_name">).*?(</string>)',
-                      r'\1DroidDeck JP\2', text)
+                      r'\1DroidDeck Patch\2', text)
         strings.write_text(text)
 
 def prepare(destination, base=None, lock_path=None, version_code=None):
@@ -79,8 +79,8 @@ def prepare(destination, base=None, lock_path=None, version_code=None):
         raise RuntimeError("Destination already exists; choose a fresh directory: %s" % destination)
     destination.parent.mkdir(parents=True, exist_ok=True)
     subprocess.run(["git", "clone", "--no-checkout", lock["repository"], str(destination)], check=True)
-    git(destination, "config", "user.name", "DroidDeck JP builder")
-    git(destination, "config", "user.email", "droiddeck-jp@users.noreply.github.com")
+    git(destination, "config", "user.name", "DroidDeck Patch builder")
+    git(destination, "config", "user.email", "droiddeck-patch@users.noreply.github.com")
     revision = base or lock["base"]
     git(destination, "fetch", "--no-tags", "origin", revision)
     git(destination, "checkout", "--detach", "FETCH_HEAD")

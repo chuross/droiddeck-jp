@@ -27,7 +27,7 @@ def publish(repository, manager, plan, directory):
     tag = plan["tag"]
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,120}", tag):
         raise RuntimeError("Invalid JP tag")
-    assets = [directory / "DroidDeck-JP.apk"]
+    assets = [directory / "DroidDeck-Patch.apk"]
     if not all(path.is_file() and path.stat().st_size for path in assets):
         raise RuntimeError("Release assets are missing")
     manifest = json.loads((directory / "jp-build.json").read_text())
@@ -38,7 +38,7 @@ def publish(repository, manager, plan, directory):
     with assets[0].open("rb") as source:
         digest = hashlib.file_digest(source, "sha256").hexdigest()
     checksum = directory / "SHA256SUMS"
-    checksum.write_text(digest + "  DroidDeck-JP.apk\n", encoding="utf-8")
+    checksum.write_text(digest + "  DroidDeck-Patch.apk\n", encoding="utf-8")
     assets.append(checksum)
     notes = directory / "release-notes.md"
     notes.write_text(
@@ -70,7 +70,7 @@ def publish(repository, manager, plan, directory):
     # The by-tag REST endpoint does not resolve draft releases. Use the
     # draft-aware CLI's initial asset list rather than querying that endpoint.
     for asset in previous_assets:
-        if asset["name"] in ("DroidDeck-JP-source.tar.gz", "jp-build.json"):
+        if asset["name"] in ("DroidDeck-Patch-source.tar.gz", "jp-build.json"):
             run("gh", "release", "delete-asset", tag, asset["name"],
                 "--repo", repository, "--yes")
     run("gh", "release", "edit", tag, "--repo", repository,

@@ -1,4 +1,4 @@
-name: Build and publish DroidDeck JP APK
+name: Build and publish DroidDeck Patch APK
 
 on:
   push:
@@ -60,7 +60,7 @@ jobs:
       - name: Prepare and validate candidate source
         if: steps.plan.outputs.build == 'true'
         env:
-          DROIDDECK_JP_SOURCE: ${{ github.workspace }}/source/build/DroidDeck
+          DROIDDECK_PATCH_SOURCE: ${{ github.workspace }}/source/build/DroidDeck
           JP_VERSION_CODE: ${{ steps.plan.outputs.version_code }}
         run: |
           python3 tools/prepare.py --lock candidate.lock.json --version-code "$JP_VERSION_CODE"
@@ -112,7 +112,7 @@ jobs:
         if: steps.plan.outputs.build == 'true'
         run: |
           mkdir -p dist
-          cp build/DroidDeck/app/build/outputs/apk/release/app-release.apk dist/DroidDeck-JP.apk
+          cp build/DroidDeck/app/build/outputs/apk/release/app-release.apk dist/DroidDeck-Patch.apk
           cp build/DroidDeck/jp-build.json dist/
       - name: Update this repository's Release
         if: steps.plan.outputs.build == 'true'

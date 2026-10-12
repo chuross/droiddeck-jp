@@ -163,7 +163,7 @@ def current_droiddeck_release(repository):
     candidates = [item for item in releases
                   if not item.get("draft") and not item.get("prerelease")
                   and item.get("published_at")
-                  and any(asset["name"] == "DroidDeck-JP.apk"
+                  and any(asset["name"] == "DroidDeck-Patch.apk"
                           for asset in item.get("assets", []))]
     if not candidates:
         raise RuntimeError("No published DroidDeck APK release; Proton must not create a release")
@@ -231,7 +231,7 @@ def publish(repository, manager, plan, directory):
     tag = target["tag_name"]
     existing = existing_release(repository, tag)
     if existing is None or existing["isDraft"] or not any(
-            asset["name"] == "DroidDeck-JP.apk" for asset in existing["assets"]):
+            asset["name"] == "DroidDeck-Patch.apk" for asset in existing["assets"]):
         raise RuntimeError("DroidDeck release is unavailable; refusing to create or publish a release")
     with tempfile.TemporaryDirectory() as folder:
         notes = Path(folder) / "notes.md"

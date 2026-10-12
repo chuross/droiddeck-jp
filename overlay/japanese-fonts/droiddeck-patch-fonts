@@ -18,7 +18,7 @@ ALIASES = (
 )
 LINKS = ("Arial", "Tahoma", "Segoe UI", "Microsoft Sans Serif")
 FAMILY = "Noto Sans CJK JP"
-BUNDLED_DIR = Path("/usr/local/share/fonts/droiddeck-jp")
+BUNDLED_DIR = Path("/usr/local/share/fonts/droiddeck-patch")
 COMPAT_FONTS = {
     "IPAMonaGothic": "ipag-mona.ttf", "IPAMonaPGothic": "ipagp-mona.ttf",
     "IPAMonaMincho": "ipam-mona.ttf", "IPAMonaPMincho": "ipamp-mona.ttf",
@@ -34,7 +34,7 @@ COMPAT_ALIASES = {
 
 
 def real_game(command, env):
-    if env.get("DROIDDECK_JP_FONTS", "1") == "0":
+    if env.get("DROIDDECK_PATCH_FONTS", "1") == "0":
         return False
     if len(command) < 3 or command[1] != "waitforexitandrun":
         return False
@@ -46,12 +46,12 @@ def real_game(command, env):
 
 
 def find_font(env):
-    family = env.get("DROIDDECK_JP_FONT_FAMILY", FAMILY)
-    custom = env.get("DROIDDECK_JP_FONT_FILE")
+    family = env.get("DROIDDECK_PATCH_FONT_FAMILY", FAMILY)
+    custom = env.get("DROIDDECK_PATCH_FONT_FILE")
     if custom:
         font = Path(custom)
         if not font.is_absolute() or not font.is_file():
-            raise RuntimeError("DROIDDECK_JP_FONT_FILE must be an absolute readable font path")
+            raise RuntimeError("DROIDDECK_PATCH_FONT_FILE must be an absolute readable font path")
         arguments = ["fc-scan", "-f", "%{file}\\n%{family}\\n", str(font)]
     else:
         arguments = ["fc-match", "-f", "%{file}\\n%{family}\\n", family + ":lang=ja"]
@@ -103,8 +103,8 @@ def prepare(command, env):
     if not real_game(command, env):
         return False
     data = Path(env["STEAM_COMPAT_DATA_PATH"])
-    family = env.get("DROIDDECK_JP_FONT_FAMILY", FAMILY)
-    compatibility = not (env.get("DROIDDECK_JP_FONT_FAMILY") or env.get("DROIDDECK_JP_FONT_FILE"))
+    family = env.get("DROIDDECK_PATCH_FONT_FAMILY", FAMILY)
+    compatibility = not (env.get("DROIDDECK_PATCH_FONT_FAMILY") or env.get("DROIDDECK_PATCH_FONT_FILE"))
     extra_fonts = {name: BUNDLED_DIR / file for name, file in COMPAT_FONTS.items()} if compatibility else {}
     for file in extra_fonts.values():
         if not file.is_file():
@@ -123,20 +123,20 @@ def prepare(command, env):
                                   for name, file in extra_fonts.items()}}
     digest = hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
     prefix = data / "pfx"
-    marker = prefix / ".droiddeck-jp-fonts-v1"
-    owned = prefix / ".droiddeck-jp-fonts-owned"
-    filename = "droiddeck-jp" + font.suffix.lower()
+    marker = prefix / ".droiddeck-patch-fonts-v1"
+    owned = prefix / ".droiddeck-patch-fonts-owned"
+    filename = "droiddeck-patch" + font.suffix.lower()
     if family != FAMILY:
         # Keep Noto registered to its own file when switching back and forth.
         tag = hashlib.sha256(family.encode()).hexdigest()[:16]
-        filename = "droiddeck-jp-" + tag + font.suffix.lower()
-        owned = prefix / (".droiddeck-jp-fonts-owned-" + tag)
+        filename = "droiddeck-patch-" + tag + font.suffix.lower()
+        owned = prefix / (".droiddeck-patch-fonts-owned-" + tag)
     fonts = prefix / "drive_c/windows/Fonts"
     placed = fonts / filename
-    extra_names = {name: "droiddeck-jp-" + file.name for name, file in extra_fonts.items()}
+    extra_names = {name: "droiddeck-patch-" + file.name for name, file in extra_fonts.items()}
     data.mkdir(parents=True, exist_ok=True)
     # Serialize only this helper; Proton retains its own prefix lock.
-    with (data / ".droiddeck-jp-fonts.lock").open("a") as lock:
+    with (data / ".droiddeck-patch-fonts.lock").open("a") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
         if marker.is_file() and placed.is_file() and not placed.is_symlink():
             extras_ready = all((fonts / extra_names[name]).is_file()
@@ -155,7 +155,7 @@ def prepare(command, env):
             raise RuntimeError("helper font filename already contains a user file")
         for name, source in extra_fonts.items():
             target = fonts / extra_names[name]
-            owner = prefix / (".droiddeck-jp-fonts-owned-" + source.name)
+            owner = prefix / (".droiddeck-patch-fonts-owned-" + source.name)
             if target.exists() and (not owner.is_file() or owner.read_text() != target.name):
                 raise RuntimeError("helper font filename already contains a user file: " + target.name)
         owned.write_text(filename)
@@ -165,24 +165,24 @@ def prepare(command, env):
         staged_font.replace(placed)
         for name, source in extra_fonts.items():
             target = fonts / extra_names[name]
-            (prefix / (".droiddeck-jp-fonts-owned-" + source.name)).write_text(target.name)
+            (prefix / (".droiddeck-patch-fonts-owned-" + source.name)).write_text(target.name)
             staging = target.with_name(target.name + ".tmp")
             staging.unlink(missing_ok=True)
             shutil.copy2(source, staging)
             staging.replace(target)
         # Wine imports the registry file through the matching Proton, rather than
         # editing a live user.reg or system.reg directly.
-        with tempfile.TemporaryDirectory(prefix="droiddeck-jp-") as temporary:
+        with tempfile.TemporaryDirectory(prefix="droiddeck-patch-") as temporary:
             registry = Path(temporary) / "fonts.reg"
             aliases = {name: COMPAT_ALIASES.get(name, family) for name in ALIASES} if compatibility else None
             registry.write_bytes(registry_text(filename, family, extra_names, aliases).encode("utf-16"))
             windows_path = "Z:" + str(registry).replace("/", "\\")
             proton_run(command[0], ["reg.exe", "import", windows_path], env)
-        staged = prefix / ".droiddeck-jp-fonts-v1.tmp"
+        staged = prefix / ".droiddeck-patch-fonts-v1.tmp"
         staged.write_text(digest)
         staged.replace(marker)
         mode = "IPAMona compatibility fonts; fallback " if compatibility else ""
-        print("droiddeck-jp: Japanese fonts ready for " + data.name + ": " + mode + family, file=sys.stderr)
+        print("droiddeck-patch: Japanese fonts ready for " + data.name + ": " + mode + family, file=sys.stderr)
         return True
 
 
@@ -190,6 +190,6 @@ if __name__ == "__main__":
     try:
         prepare(sys.argv[1:], os.environ.copy())
     except Exception as error:
-        print("droiddeck-jp: " + str(error), file=sys.stderr)
+        print("droiddeck-patch: " + str(error), file=sys.stderr)
         sys.exit(1)
 

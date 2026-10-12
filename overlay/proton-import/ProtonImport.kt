@@ -14,7 +14,7 @@ import org.json.JSONObject
 object ProtonImport {
     const val BUSY_ID = "local-import"
     private const val PREFIX = "DDJP-"
-    private const val MARKER = ".droiddeck-jp-import.json"
+    private const val MARKER = ".droiddeck-patch-import.json"
     private const val MAX_ARCHIVE = 4L * 1024 * 1024 * 1024
     private const val RESERVE = 256L * 1024 * 1024
     @Volatile var inProgress = false

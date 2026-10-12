@@ -12,7 +12,7 @@ import tarfile
 import tempfile
 
 PREFIX = "DDJP-"
-MARKER = ".droiddeck-jp-import.json"
+MARKER = ".droiddeck-patch-import.json"
 RESERVE = 256 * 1024 * 1024
 MAX_BYTES = 16 * 1024 * 1024 * 1024
 MAX_ENTRIES = 200000

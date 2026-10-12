@@ -143,9 +143,9 @@ class LowMemoryTest(unittest.TestCase):
                                 env=dict(os.environ, GLIBC_TUNABLES=value), capture_output=True, text=True, check=True)
         self.assertEqual(result.stdout, LOW["allocator_tunables"](value))
 
-    @unittest.skipUnless(os.environ.get("DROIDDECK_JP_SOURCE"), "requires prepared session script")
+    @unittest.skipUnless(os.environ.get("DROIDDECK_PATCH_SOURCE"), "requires prepared session script")
     def test_native_session_allocator_on_off_and_ab_toggle(self):
-        source = Path(os.environ["DROIDDECK_JP_SOURCE"])
+        source = Path(os.environ["DROIDDECK_PATCH_SOURCE"])
         script = (source / "tools/linuxfs/overlay/usr/local/bin/droiddeck-session").read_text()
         hook = script.split("# Shared low-memory settings", 1)[1].split("# Until the runtime is stable", 1)[0]
         hook = "# Shared low-memory settings" + hook

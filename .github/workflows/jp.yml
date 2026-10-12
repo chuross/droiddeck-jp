@@ -62,7 +62,7 @@ jobs:
         run: python3 tools/prepare.py --lock candidate.lock.json
       - name: Validate generated launch scripts
         env:
-          DROIDDECK_JP_SOURCE: ${{ github.workspace }}/build/DroidDeck
+          DROIDDECK_PATCH_SOURCE: ${{ github.workspace }}/build/DroidDeck
         run: |
           bash -n build/DroidDeck/tools/linuxfs/overlay/usr/local/bin/droiddeck-session
           python3 -m py_compile build/DroidDeck/tools/linuxfs/overlay/usr/local/bin/droiddeck-game-env

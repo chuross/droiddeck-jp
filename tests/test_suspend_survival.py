@@ -13,14 +13,14 @@ APPLY = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(APPLY)
 
 
-@unittest.skipUnless(os.environ.get("DROIDDECK_JP_SOURCE"), "requires prepared upstream checkout")
+@unittest.skipUnless(os.environ.get("DROIDDECK_PATCH_SOURCE"), "requires prepared upstream checkout")
 class SuspendSurvivalIntegrationTest(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.source = Path(self.temp.name)
         subprocess.run(["git", "init", "-q", str(self.source)], check=True)
-        upstream = Path(os.environ["DROIDDECK_JP_SOURCE"])
+        upstream = Path(os.environ["DROIDDECK_PATCH_SOURCE"])
         # The prepared tree has all overlays, but HEAD is the original pinned upstream.
         paths = re.findall(r"^--- a/(.+)$", APPLY.PATCH.read_text(), re.MULTILINE)
         for path in paths:
@@ -50,7 +50,7 @@ class SuspendSurvivalIntegrationTest(unittest.TestCase):
 
     def test_applies_after_low_memory_without_overwriting_it(self):
         low_patch = ROOT / "overlay/low-memory/low-memory.patch"
-        upstream = Path(os.environ["DROIDDECK_JP_SOURCE"])
+        upstream = Path(os.environ["DROIDDECK_PATCH_SOURCE"])
         for path in re.findall(r"^--- a/(.+)$", low_patch.read_text(), re.MULTILINE):
             target = self.source / path
             if not target.exists():

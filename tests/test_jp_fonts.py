@@ -7,7 +7,7 @@ import unittest
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
-loader = importlib.machinery.SourceFileLoader("jp_fonts", str(ROOT / "overlay/japanese-fonts/droiddeck-jp-fonts"))
+loader = importlib.machinery.SourceFileLoader("jp_fonts", str(ROOT / "overlay/japanese-fonts/droiddeck-patch-fonts"))
 spec = importlib.util.spec_from_loader(loader.name, loader)
 helper = importlib.util.module_from_spec(spec)
 loader.exec_module(helper)
@@ -23,7 +23,7 @@ class FontsTest(unittest.TestCase):
         self.data = self.root / "compatdata/123"
         self.prefix = self.data / "pfx"
         self.env = {"STEAM_COMPAT_DATA_PATH": str(self.data), "EXAMPLE": "retained",
-                    "DROIDDECK_JP_FONT_FAMILY": helper.FAMILY}
+                    "DROIDDECK_PATCH_FONT_FAMILY": helper.FAMILY}
         self.command = ["/selected/Proton/proton", "waitforexitandrun", "game.exe"]
         self.calls = []
         self.registry = None
@@ -50,7 +50,7 @@ class FontsTest(unittest.TestCase):
         self.assertIn('"MS Gothic"="Noto Sans CJK JP"', self.registry)
         self.assertIn('"ＭＳ ゴシック"="Noto Sans CJK JP"', self.registry)
         self.assertIn('"Arial"=hex(7):', self.registry)
-        placed = self.prefix / "drive_c/windows/Fonts/droiddeck-jp.ttc"
+        placed = self.prefix / "drive_c/windows/Fonts/droiddeck-patch.ttc"
         self.assertFalse(placed.is_symlink())
         self.assertEqual(placed.read_bytes(), self.font.read_bytes())
         self.assertEqual((self.prefix / "user.reg").read_text(), "existing registry contents")
@@ -76,7 +76,7 @@ class FontsTest(unittest.TestCase):
              patch.object(helper, "proton_run", side_effect=RuntimeError("import failed")):
             with self.assertRaises(RuntimeError):
                 helper.prepare(self.command, self.env)
-        self.assertFalse((self.prefix / ".droiddeck-jp-fonts-v1").exists())
+        self.assertFalse((self.prefix / ".droiddeck-patch-fonts-v1").exists())
         self.assertTrue(self.prepare())
 
     def test_probes_nonlaunch_verbs_and_opt_out_never_touch_prefix(self):
@@ -85,7 +85,7 @@ class FontsTest(unittest.TestCase):
                 env = dict(self.env, STEAM_COMPAT_DATA_PATH=str(self.root / "compatdata" / value))
                 self.assertFalse(helper.prepare(self.command, env))
             self.assertFalse(helper.prepare(["proton", "getcompatpath", "game.exe"], self.env))
-            self.assertFalse(helper.prepare(self.command, dict(self.env, DROIDDECK_JP_FONTS="0")))
+            self.assertFalse(helper.prepare(self.command, dict(self.env, DROIDDECK_PATCH_FONTS="0")))
             self.assertFalse(helper.prepare(self.command, {}))
             self.assertFalse(helper.prepare(self.command, dict(self.env, STEAM_COMPAT_DATA_PATH="relative")))
             lookup.assert_not_called()
@@ -107,7 +107,7 @@ class FontsTest(unittest.TestCase):
         fonts = self.prefix / "drive_c/windows/Fonts"
         fonts.mkdir(parents=True)
         (self.prefix / "user.reg").write_text("untouched")
-        own = fonts / "droiddeck-jp.ttc"
+        own = fonts / "droiddeck-patch.ttc"
         own.write_bytes(b"user font")
         with self.assertRaises(RuntimeError):
             self.prepare()
@@ -116,23 +116,23 @@ class FontsTest(unittest.TestCase):
     def test_switch_family_updates_existing_prefix_and_can_return_to_noto(self):
         self.assertTrue(self.prepare())
         self.calls.clear()
-        self.env["DROIDDECK_JP_FONT_FAMILY"] = "IPAGothic"
+        self.env["DROIDDECK_PATCH_FONT_FAMILY"] = "IPAGothic"
         self.assertTrue(self.prepare())
         self.assertEqual([call[1][0] for call in self.calls], ["reg.exe"])
         self.assertIn('"MS Gothic"="IPAGothic"', self.registry)
         self.assertIn('"IPAGothic (TrueType)"=', self.registry)
-        original = self.prefix / "drive_c/windows/Fonts/droiddeck-jp.ttc"
+        original = self.prefix / "drive_c/windows/Fonts/droiddeck-patch.ttc"
         self.assertEqual(original.read_bytes(), self.font.read_bytes())
         self.calls.clear()
         self.assertTrue(self.prepare())
         self.assertEqual(self.calls, [])
-        self.env["DROIDDECK_JP_FONT_FAMILY"] = helper.FAMILY
+        self.env["DROIDDECK_PATCH_FONT_FAMILY"] = helper.FAMILY
         self.assertTrue(self.prepare())
         self.assertIn('"MS Gothic"="Noto Sans CJK JP"', self.registry)
 
     def test_family_change_retries_after_failed_import(self):
         self.prepare()
-        self.env["DROIDDECK_JP_FONT_FAMILY"] = "IPAGothic"
+        self.env["DROIDDECK_PATCH_FONT_FAMILY"] = "IPAGothic"
         with patch.object(helper, "find_font", return_value=self.font), \
              patch.object(helper, "proton_run", side_effect=RuntimeError("import failed")):
             with self.assertRaises(RuntimeError):
@@ -142,8 +142,8 @@ class FontsTest(unittest.TestCase):
         self.assertEqual([call[1][0] for call in self.calls], ["reg.exe"])
 
     def test_custom_file_is_scanned_and_family_verified(self):
-        env = dict(self.env, DROIDDECK_JP_FONT_FILE=str(self.font),
-                   DROIDDECK_JP_FONT_FAMILY="IPAGothic")
+        env = dict(self.env, DROIDDECK_PATCH_FONT_FILE=str(self.font),
+                   DROIDDECK_PATCH_FONT_FAMILY="IPAGothic")
         result = type("Result", (), {"stdout": str(self.font) + "\nIPAGothic\n"})()
         with patch.object(helper.subprocess, "run", return_value=result) as run:
             self.assertEqual(helper.find_font(env), self.font)
@@ -156,19 +156,19 @@ class FontsTest(unittest.TestCase):
     def test_invalid_custom_file_does_not_touch_prefix(self):
         for value in ("relative.ttf", str(self.root / "missing.ttf")):
             with self.assertRaises(RuntimeError):
-                helper.prepare(self.command, dict(self.env, DROIDDECK_JP_FONT_FILE=value))
+                helper.prepare(self.command, dict(self.env, DROIDDECK_PATCH_FONT_FILE=value))
         self.assertFalse(self.data.exists())
 
     def test_requested_family_does_not_accept_noto_fallback(self):
         result = type("Result", (), {"stdout": str(self.font) + "\nNoto Sans CJK JP\n"})()
         with patch.object(helper.subprocess, "run", return_value=result):
             with self.assertRaises(RuntimeError):
-                helper.find_font(dict(self.env, DROIDDECK_JP_FONT_FAMILY="IPAGothic"))
+                helper.find_font(dict(self.env, DROIDDECK_PATCH_FONT_FAMILY="IPAGothic"))
 
     def test_default_installs_five_fonts_and_migrates_existing_noto_prefix(self):
         self.prepare()
         self.calls.clear()
-        del self.env["DROIDDECK_JP_FONT_FAMILY"]
+        del self.env["DROIDDECK_PATCH_FONT_FAMILY"]
         bundled = self.root / "bundled"
         bundled.mkdir()
         for filename in helper.COMPAT_FONTS.values():
@@ -180,7 +180,7 @@ class FontsTest(unittest.TestCase):
                 self.assertIn(helper.reg_string(alias) + "=" + helper.reg_string(family), self.registry)
             self.assertIn('"Meiryo"="Noto Sans CJK JP"', self.registry)
             for filename in helper.COMPAT_FONTS.values():
-                self.assertEqual((self.prefix / "drive_c/windows/Fonts" / ("droiddeck-jp-" + filename)).read_bytes(), filename.encode())
+                self.assertEqual((self.prefix / "drive_c/windows/Fonts" / ("droiddeck-patch-" + filename)).read_bytes(), filename.encode())
             self.calls.clear()
             self.assertTrue(self.prepare())
             self.assertEqual(self.calls, [])
@@ -189,14 +189,14 @@ class FontsTest(unittest.TestCase):
             self.assertEqual([call[1][0] for call in self.calls], ["reg.exe"])
 
     def test_missing_bundled_font_does_not_modify_prefix(self):
-        del self.env["DROIDDECK_JP_FONT_FAMILY"]
+        del self.env["DROIDDECK_PATCH_FONT_FAMILY"]
         with patch.object(helper, "BUNDLED_DIR", self.root / "missing"):
             with self.assertRaises(RuntimeError):
                 self.prepare()
         self.assertFalse(self.data.exists())
 
     def test_default_still_works_without_android_noto(self):
-        del self.env["DROIDDECK_JP_FONT_FAMILY"]
+        del self.env["DROIDDECK_PATCH_FONT_FAMILY"]
         bundled = self.root / "bundled"
         bundled.mkdir()
         for filename in helper.COMPAT_FONTS.values():
