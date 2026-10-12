@@ -39,7 +39,7 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       DROIDDECK_GITHUB_REPOSITORY: Droid-Deck/DroidDeck
       DROIDDECK_NDK_VERSION: 27.3.13750724
-      DROIDDECK_BUILD_IMAGE: droiddeck-local-cross:24.04-v2
+      DROIDDECK_BUILD_IMAGE: droiddeck-local-cross:24.04-v3
     defaults:
       run:
         working-directory: source
@@ -127,7 +127,12 @@ jobs:
       - name: Prepare native cross-compiler image
         if: steps.plan.outputs.build == 'true'
         working-directory: source/build/DroidDeck
-        run: docker build --platform linux/amd64 -t "$DROIDDECK_BUILD_IMAGE" -f tools/local-cross.Dockerfile .
+        run: |
+          # build_local.sh uses the ECR alias for the official Debian i386 compiler base.
+          # Preload the same official image from Docker Hub to avoid ECR's anonymous quota.
+          docker pull --platform linux/amd64 docker.io/library/debian:bullseye
+          docker tag docker.io/library/debian:bullseye public.ecr.aws/docker/library/debian:bullseye
+          docker build --platform linux/amd64 -t "$DROIDDECK_BUILD_IMAGE" -f tools/local-cross.Dockerfile .
       - name: Native components and release APK build
         if: steps.plan.outputs.build == 'true'
         working-directory: source/build/DroidDeck
