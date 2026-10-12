@@ -365,6 +365,13 @@ class ExperimentalPackageTest(unittest.TestCase):
         for name in ("proton", "toolmanifest.vdf", "LICENSE"):
             (self.tree / name).write_text("upstream")
         (self.tree / "compatibilitytool.vdf").write_text(self.lock["build_name"])
+        (self.tree / "proton").chmod(0o755)
+        binaries = self.tree / "files/bin-arm64"
+        binaries.mkdir(parents=True)
+        header = b"\x7fELF\x02\x01" + b"\0" * 12 + (183).to_bytes(2, "little")
+        for name in ("wine", "wineserver"):
+            (binaries / name).write_bytes(header)
+            (binaries / name).chmod(0o755)
         for directory, name, export in (("aarch64-windows", "ntdll.dll", "NtGetContextThread"),
                                          ("dxvk/aarch64-windows", "dxgi.dll", "CreateDXGIFactory")):
             dll = self.tree / "files/lib/wine" / directory / name
@@ -404,6 +411,10 @@ class ExperimentalPackageTest(unittest.TestCase):
             package.package(self.task, "manager", self.lock_path)
 
     def test_stock_dlls_are_replaced_with_source_and_validated_arm64x(self):
+        importer = __import__("runpy").run_path(str(ROOT.parent / "proton-import/droiddeck-proton-import"))
+        with self.assertRaises(importer["ImportProblem"]) as failure:
+            importer["validate"](self.tree)
+        self.assertEqual(failure.exception.code, "not_arm64")
         self.invoke()
         packaged = self.task / "unpacked" / self.lock["build_name"]
         metadata = json.loads((packaged / "droiddeck-ntcontext-build.json").read_text())
@@ -412,6 +423,9 @@ class ExperimentalPackageTest(unittest.TestCase):
         self.assertTrue((packaged / "droiddeck-source/source.tar.xz").is_file())
         self.assertEqual((packaged / "LICENSE.proton").read_text(), "Valve license")
         self.assertTrue((self.task / "dist" / release.asset_names(self.lock)[0]).is_file())
+        self.assertEqual((packaged / "files/bin/wine").read_bytes(),
+                         (packaged / "files/bin-arm64/wine").read_bytes())
+        importer["validate"](packaged)
 
     def test_base_checksum_mismatch_prevents_extraction(self):
         self.lock["base_sha256"] = "0" * 64

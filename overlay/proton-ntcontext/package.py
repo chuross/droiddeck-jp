@@ -4,9 +4,11 @@ import hashlib
 import json
 from pathlib import Path
 import re
+import runpy
 import shutil
 import struct
 import subprocess
+import tarfile
 
 ROOT = Path(__file__).resolve().parent
 
@@ -140,6 +142,22 @@ def write_preserving_mode(path, data):
     finally:
         path.chmod(mode)
 
+def import_layout(tree):
+    importer = runpy.run_path(str(ROOT.parent / "proton-import/droiddeck-proton-import"))
+    native = tree / "files/bin-arm64"
+    if native.is_dir():
+        directory = tree / "files/bin"
+        directory.mkdir(exist_ok=True)
+        for name in ("wine", "wineserver"):
+            target = native / name
+            if not importer["arm64_elf"](target):
+                raise ValueError("PLOP native " + name + " is not ARM64")
+            alias = directory / name
+            if not alias.exists() and not alias.is_symlink():
+                alias.symlink_to("../bin-arm64/" + name)
+    importer["validate"](tree)
+    return importer
+
 
 def package(task, manager, lock_path=None):
     lock = json.loads((lock_path or ROOT / "build.lock.json").read_text())
@@ -216,8 +234,15 @@ def package(task, manager, lock_path=None):
     shutil.copy2(dist / (lock["build_name"] + "-wine-source.tar.xz"), source_info / "source.tar.xz")
     packaged = staging / lock["build_name"]
     tree.rename(packaged)
+    importer = import_layout(packaged)
     subprocess.run(["tar", "-czf", str(dist / (lock["build_name"] + "-aarch64.tar.gz")),
                     "-C", str(staging), lock["build_name"]], check=True)
+    # Apply the shipping APK's archive policy before the binary is published.
+    with tarfile.open(dist / (lock["build_name"] + "-aarch64.tar.gz"), "r:gz") as archive:
+        entries, _ = importer["plan"](archive, 32 * 1024 ** 3)
+        for member, path in entries:
+            if member.issym():
+                (staging / str(path)).resolve().relative_to(packaged.resolve())
 
 
 if __name__ == "__main__":
