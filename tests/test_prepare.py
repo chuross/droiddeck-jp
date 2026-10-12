@@ -149,7 +149,9 @@ class PrepareTest(unittest.TestCase):
         with patch.object(fonts, "bundle_fonts"), \
              patch.object(imports, "check"), patch.object(imports, "apply"), \
              patch.object(builder.PATCHES["low-memory"], "check"), \
-             patch.object(builder.PATCHES["low-memory"], "apply"):
+             patch.object(builder.PATCHES["low-memory"], "apply"), \
+             patch.object(builder.PATCHES["suspend-survival"], "check"), \
+             patch.object(builder.PATCHES["suspend-survival"], "apply"):
             builder.overlay(self.source)
         for name, text in preserved.items():
             self.assertEqual((target / name).read_text(), text)

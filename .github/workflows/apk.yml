@@ -12,6 +12,7 @@ on:
       - 'overlay/proton-import/**'
       - 'overlay/build-cache/**'
       - 'overlay/low-memory/**'
+      - 'overlay/suspend-survival/**'
       - 'upstream.lock.json'
       - '.github/workflows/apk.yml'
   workflow_dispatch:

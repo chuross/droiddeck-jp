@@ -1,0 +1,460 @@
+diff --git a/app/src/main/java/com/droiddeck/launcher/core/HostProcess.kt b/app/src/main/java/com/droiddeck/launcher/core/HostProcess.kt
+index 550d55a..e1fe4bb 100644
+--- a/app/src/main/java/com/droiddeck/launcher/core/HostProcess.kt
++++ b/app/src/main/java/com/droiddeck/launcher/core/HostProcess.kt
+@@ -3,6 +3,7 @@ package com.droiddeck.launcher.core
+ import android.util.Log
+ import java.io.File
+ import java.util.function.Consumer
++import java.util.function.BiConsumer
+ 
+ /**
+  * Starts a process on the Android side - proot, the audio daemon, logcat - and hands back its pid.
+@@ -27,6 +28,14 @@ object HostProcess {
+      */
+     @JvmStatic
+     fun start(command: String, env: Array<String>?, dir: File?, onExit: Consumer<Int>?, onLine: Consumer<String>?): Int {
++        return startTracked(command, env, dir,
++            if (onExit == null) null else BiConsumer { _, status -> onExit.accept(status) }, onLine)
++    }
++
++    /** The waiting thread owns this exact pid even when the process exits before start returns. */
++    @JvmStatic
++    fun startTracked(command: String, env: Array<String>?, dir: File?,
++                     onExit: BiConsumer<Int, Int>?, onLine: Consumer<String>?): Int {
+         val argv = split(command)
+         if (argv.isEmpty()) return -1
+         return try {
+@@ -54,7 +63,7 @@ object HostProcess {
+                 Thread({
+                     var status = -1
+                     try { status = process.waitFor() } catch (e: InterruptedException) { /* reported as -1 */ }
+-                    onExit.accept(status)
++                    onExit.accept(pid, status)
+                 }, "proc-wait-$pid").apply { priority = Thread.NORM_PRIORITY - 1; start() }
+             }
+             pid
+diff --git a/app/src/main/java/com/droiddeck/launcher/session/SessionArtifacts.kt b/app/src/main/java/com/droiddeck/launcher/session/SessionArtifacts.kt
+index 500c2f7..1d16b71 100644
+--- a/app/src/main/java/com/droiddeck/launcher/session/SessionArtifacts.kt
++++ b/app/src/main/java/com/droiddeck/launcher/session/SessionArtifacts.kt
+@@ -245,6 +245,7 @@ object SessionArtifacts {
+                         "session died of a crash, the entry is in there unless the device rebooted.\n"
+                 )
+                 val record = Record(dir)
++                SuspendSurvival.recoverExit(context, dir)
+                 if (newest) copySteamLogs(context, dir, record)
+                 SessionLogCapture.dumpCrashBuffer(File(dir, "crash.log"))
+                 SessionEvents.record("session.artifacts_recovered", mapOf("newest" to newest), dir)
+diff --git a/app/src/main/java/com/droiddeck/launcher/session/SessionEvents.kt b/app/src/main/java/com/droiddeck/launcher/session/SessionEvents.kt
+index 5f8f2bf..aa6c115 100644
+--- a/app/src/main/java/com/droiddeck/launcher/session/SessionEvents.kt
++++ b/app/src/main/java/com/droiddeck/launcher/session/SessionEvents.kt
+@@ -38,6 +38,7 @@ object SessionEvents {
+             SessionState.firstFrameSeen = false
+             SessionState.suspended = false
+         }
++        SuspendSurvival.remember(context, dir)
+         record("session.created", mapOf("mode" to mode), dir)
+     }
+ 
+diff --git a/app/src/main/java/com/droiddeck/launcher/session/SessionPrefs.kt b/app/src/main/java/com/droiddeck/launcher/session/SessionPrefs.kt
+index 1df9bab..ef86804 100644
+--- a/app/src/main/java/com/droiddeck/launcher/session/SessionPrefs.kt
++++ b/app/src/main/java/com/droiddeck/launcher/session/SessionPrefs.kt
+@@ -796,6 +796,14 @@ object SessionPrefs {
+         prefs(context).edit().putBoolean("pipAutoEnter", enabled).apply()
+     }
+ 
++    /** Experimental, shared by all session modes; read once at the next session start. */
++    fun keepCpuAwakeWhileSuspended(context: Context): Boolean =
++        prefs(context).getBoolean("jpSuspendKeepalive", false)
++
++    fun setKeepCpuAwakeWhileSuspended(context: Context, on: Boolean) {
++        prefs(context).edit().putBoolean("jpSuspendKeepalive", on).apply()
++    }
++
+     fun suspendPolicy(context: Context, mode: String): String =
+         prefs(context).getString("suspendPolicy.${prefMode(mode)}", SUSPEND_MANUAL)
+             ?.let { if (it == LEGACY_SUSPEND_DOWNLOADS) SUSPEND_AUTO else it }
+diff --git a/app/src/main/java/com/droiddeck/launcher/session/SessionService.kt b/app/src/main/java/com/droiddeck/launcher/session/SessionService.kt
+index 037e5a2..6b9d1d7 100644
+--- a/app/src/main/java/com/droiddeck/launcher/session/SessionService.kt
++++ b/app/src/main/java/com/droiddeck/launcher/session/SessionService.kt
+@@ -70,6 +70,15 @@ class SessionService : Service() {
+     private val stopLock = Any()
+     private var wakeLock: PowerManager.WakeLock? = null
+     private var wifiLock: WifiManager.WifiLock? = null
++    private var keepCpuAwakeWhileSuspended = false
++    private val renewSuspendWakeLock = object : Runnable {
++        override fun run() {
++            if (!SessionState.running || !SessionState.suspended || !keepCpuAwakeWhileSuspended) return
++            acquireWakeLock(renew = true)
++            recordSurvivalState("suspend.keepalive_renewed")
++            mainHandler.postDelayed(this, SUSPEND_WAKE_RENEW_MS)
++        }
++    }
+     private var sessionPid = -1
+     /** Auxiliary PTY-backed proot shells launched from a secondary-display terminal. */
+     private val auxiliaryProcesses = HashMap<Int, Long>()
+@@ -162,8 +171,8 @@ class SessionService : Service() {
+                 return START_NOT_STICKY
+             }
+             ACTION_STOP -> {
+-                Log.i(TAG, "stop requested from the notification")
+-                stopSession(0)
++                Log.i(TAG, "stop action requested")
++                stopSession(0, "stop_action")
+                 return START_NOT_STICKY
+             }
+             ACTION_PIP_BEGIN -> {
+@@ -214,6 +223,7 @@ class SessionService : Service() {
+         }
+         SessionState.mode = intent?.getStringExtra(EXTRA_MODE) ?: MODE_STEAM
+         suspendPolicy = SessionPrefs.suspendPolicy(this, SessionState.mode)
++        keepCpuAwakeWhileSuspended = SessionPrefs.keepCpuAwakeWhileSuspended(this)
+         steamDownloadsInBackground = SessionPrefs.steamDownloadsInBackground(this)
+         activityVisible = true
+         screenOn = (getSystemService(Context.POWER_SERVICE) as? PowerManager)?.isInteractive ?: true
+@@ -315,7 +325,7 @@ class SessionService : Service() {
+             LinuxRuntime.writeAccounts(this)
+         } catch (e: Exception) {
+             Log.e(TAG, "could not write the guest's passwd/group", e)
+-            stopSession(-1)
++            stopSession(-1, "account_setup_failed")
+             return
+         }
+ 
+@@ -419,7 +429,7 @@ class SessionService : Service() {
+             val program = SessionState.program
+             if (program.isNullOrEmpty()) {
+                 Log.e(TAG, "run mode without a program")
+-                stopSession(65)
++                stopSession(65, "invalid_run_program")
+                 return
+             }
+             guest.add(program)
+@@ -505,13 +515,20 @@ class SessionService : Service() {
+         // by the teardown a second after the new one has started, and its exit used to arrive
+         // here as "session ended: 137" and end the NEW session. An exit belongs to the session
+         // that started it.
+-        val pid = HostProcess.start(line, hostEnv.asArray(), root, { status ->
+-            if (gen != sessionGen) {
+-                Log.i(TAG, "an earlier session's process ended ($status); the current one carries on")
+-                return@start
++        val pid = HostProcess.startTracked(line, hostEnv.asArray(), root, { exitedPid, status ->
++            // Capture the observed exit state before the main queue can process a wake event.
++            val exitEvidence = mapOf("pid" to exitedPid, "status" to status,
++                "observedAt" to System.currentTimeMillis(),
++                "wasSuspended" to SessionState.suspended, "screenOn" to screenOn)
++            mainHandler.post {
++                if (gen != sessionGen || !SessionState.running) {
++                    Log.i(TAG, "an earlier or stopped session's process ended ($status)")
++                    return@post
++                }
++                recordSurvivalState("guest.process_exit", exitEvidence)
++                Log.i(TAG, "session ended: $status (pid $exitedPid)")
++                stopSession(status, "guest_process_exit")
+             }
+-            Log.i(TAG, "session ended: $status")
+-            stopSession(status ?: -1)
+         }, null)
+         Log.i(TAG, "session pid $pid, log ${sessionLog.path}")
+         if (gen != sessionGen || !SessionState.running) {
+@@ -534,7 +551,7 @@ class SessionService : Service() {
+         } else {
+             SessionEvents.record("guest.start_failed", mapOf("pid" to pid))
+             SessionEvents.fail("GUEST_START_FAILED", "The guest process could not be started", pid)
+-            stopSession(-1)
++            stopSession(-1, "guest_start_failed")
+             return
+         }
+         if (gen == sessionGen && SessionState.running) {
+@@ -547,6 +564,16 @@ class SessionService : Service() {
+                 resumeAudio = {
+                     if (!pulse.setSinkSuspended(false)) Log.w(TAG, "could not resume audio sink")
+                 },
++                recordProcesses = { stage, processes ->
++                    if (gen == sessionGen && SessionState.running) {
++                        recordSurvivalState("session.process_snapshot", mapOf(
++                            "stage" to stage,
++                            "processes" to org.json.JSONArray(processes.map { org.json.JSONObject(it) }),
++                            "childCount" to processes.count { it["role"] in setOf("SESSION_CHILD", "HELPER_CHILD") },
++                            "appProcess" to org.json.JSONObject(SuspendSurvival.inspect(android.os.Process.myPid(), role = "APP")),
++                        ))
++                    }
++                },
+             )
+             mainHandler.post { updateSuspendPolicy() }
+             updateDownloadMonitoring()
+@@ -558,6 +585,7 @@ class SessionService : Service() {
+         // One folder per session, claimed by whoever started first - the activity starts the
+         // compositor before this service runs - so the compositor's log lands in the same place.
+         val sessionDir = SessionPaths.beginOrCurrent(this)
++        SuspendSurvival.remember(this, sessionDir)
+         val sessionLog = File(sessionDir, "session.log")
+         SessionState.logFile = sessionLog
+         SessionState.logDirectory = sessionDir
+@@ -1226,7 +1254,7 @@ class SessionService : Service() {
+                     .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                 if (url.isNotEmpty()) next.putExtra(EXTRA_STEAM_URL, url)
+                 SessionState.relaunch = next
+-                android.os.Handler(android.os.Looper.getMainLooper()).post { stopSession(0) }
++                android.os.Handler(android.os.Looper.getMainLooper()).post { stopSession(0, "session_relaunch") }
+             }
+         }
+         watcher.startWatching()
+@@ -1289,7 +1317,9 @@ class SessionService : Service() {
+                     if (success) {
+                         SessionState.suspended = true
+                         SessionEvents.transition(SessionPhase.SUSPENDED, "session.suspended")
+-                        releaseLocks()
++                        recordSurvivalState("suspend.locks_before")
++                        applySuspendedLocks()
++                        recordSurvivalState("suspend.locks_after")
+                         refreshNotification()
+                     } else {
+                         completeNativeSleep()
+@@ -1301,7 +1331,9 @@ class SessionService : Service() {
+                 }
+             }
+         } else {
++            mainHandler.removeCallbacks(renewSuspendWakeLock)
+             acquireLocks()
++            recordSurvivalState("resume.locks_acquired")
+             controller.resume { success ->
+                 mainHandler.post {
+                     if (gen != sessionGen || !SessionState.running) return@post
+@@ -1450,7 +1482,9 @@ class SessionService : Service() {
+         }, "tracer-priority").start()
+     }
+ 
+-    private fun stopSession(status: Int) {
++    private fun stopSession(status: Int, reason: String = "stop_requested") {
++        recordSurvivalState("session.stop_called", mapOf("status" to status, "reason" to reason))
++        mainHandler.removeCallbacks(renewSuspendWakeLock)
+         cancelQueuedSteamGame()
+         completeNativeSleep()
+         synchronized(stopLock) {
+@@ -1460,7 +1494,7 @@ class SessionService : Service() {
+         updateDownloadMonitoring()
+         val stoppedGen = sessionGen
+         SessionState.stopRequested = false
+-        SessionEvents.record("guest.exited", mapOf("status" to status))
++        SessionEvents.record("guest.exited", mapOf("status" to status, "stopReason" to reason))
+         GpuClockPin.stop(this)
+         SessionEvents.transition(SessionPhase.STOPPING, "session.stopping", mapOf("status" to status))
+         suspendOperationPending = false
+@@ -1522,6 +1556,7 @@ class SessionService : Service() {
+      * guest would survive as an orphan holding the rootfs and the GPU. Treat the swipe as "quit".
+      */
+     override fun onTaskRemoved(rootIntent: Intent?) {
++        recordSurvivalState("service.task_removed", mapOf("pipTask" to pipTask))
+         if (pipTask) {
+             Log.i(TAG, "PiP task dismissed - retaining the session under its background policy")
+             activityVisible = false
+@@ -1529,12 +1564,13 @@ class SessionService : Service() {
+             return
+         }
+         Log.i(TAG, "task removed - ending the session")
+-        stopSession(0)
++        stopSession(0, "task_removed")
+         super.onTaskRemoved(rootIntent)
+     }
+ 
+     override fun onDestroy() {
+-        stopSession(0)
++        recordSurvivalState("service.destroyed")
++        stopSession(0, "service_destroyed")
+         if (screenReceiverRegistered) {
+             unregisterReceiver(screenReceiver)
+             screenReceiverRegistered = false
+@@ -1546,19 +1582,58 @@ class SessionService : Service() {
+ 
+     // ── Keeping the process alive ───────────────────────────────────────────────────────────
+ 
++    private fun recordSurvivalState(event: String, fields: Map<String, Any?> = emptyMap()) {
++        runCatching {
++            val power = getSystemService(Context.POWER_SERVICE) as? PowerManager
++            SessionEvents.record(event, mapOf(
++                "appPid" to android.os.Process.myPid(), "guestPid" to sessionPid,
++                "wasSuspended" to SessionState.suspended, "running" to SessionState.running,
++                "screenOn" to screenOn, "activityVisible" to activityVisible,
++                "wakeLockHeld" to (wakeLock?.isHeld == true),
++                "wifiLockHeld" to (wifiLock?.isHeld == true),
++                "keepCpuAwakeWhileSuspended" to keepCpuAwakeWhileSuspended,
++                "deviceIdleMode" to power?.isDeviceIdleMode,
++                "batteryOptimizationIgnored" to power?.isIgnoringBatteryOptimizations(packageName),
++            ) + fields)
++        }
++    }
++
++    private fun applySuspendedLocks() {
++        if (keepCpuAwakeWhileSuspended) {
++            // Renew now as the lock originally acquired at session start may be near its expiry.
++            acquireWakeLock(renew = true)
++            releaseWifiLock()
++            mainHandler.removeCallbacks(renewSuspendWakeLock)
++            mainHandler.postDelayed(renewSuspendWakeLock, SUSPEND_WAKE_RENEW_MS)
++        } else {
++            releaseLocks()
++        }
++    }
++
+     private fun acquireLocks() {
++        acquireWakeLock()
++        acquireWifiLock()
++    }
++
++    private fun acquireWakeLock(renew: Boolean = false) {
+         try {
+             if (wakeLock?.isHeld != true) {
+                 val power = getSystemService(Context.POWER_SERVICE) as? PowerManager
+                 wakeLock = power?.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "DroidDeck:session")?.apply {
+                     setReferenceCounted(false)
+-                    acquire(12L * 60L * 60L * 1000L)
++                    acquire(WAKE_LOCK_TIMEOUT_MS)
+                 }
++            } else if (renew) {
++                // Non-reference-counted acquire replaces the old timeout.
++                wakeLock?.acquire(WAKE_LOCK_TIMEOUT_MS)
+             }
+             Log.i(TAG, "wake lock held=${wakeLock?.isHeld}")
+         } catch (t: Throwable) {
+             Log.w(TAG, "no wake lock (${t.message}) - the session may be killed in the background")
+         }
++    }
++
++    private fun acquireWifiLock() {
+         try {
+             val wifi = applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
+             @Suppress("DEPRECATION") // deprecated from API 29, still honoured; targetSdk is 28
+@@ -1578,12 +1653,21 @@ class SessionService : Service() {
+     }
+ 
+     private fun releaseLocks() {
++        mainHandler.removeCallbacks(renewSuspendWakeLock)
++        releaseWakeLock()
++        releaseWifiLock()
++    }
++
++    private fun releaseWakeLock() {
+         try {
+             wakeLock?.takeIf { it.isHeld }?.release()
+         } catch (t: Throwable) {
+             Log.w(TAG, "releasing the wake lock", t)
+         }
+         wakeLock = null
++    }
++
++    private fun releaseWifiLock() {
+         try {
+             wifiLock?.takeIf { it.isHeld }?.release()
+         } catch (t: Throwable) {
+@@ -1707,6 +1791,8 @@ class SessionService : Service() {
+ 
+     companion object {
+         private const val TAG = "SessionService"
++        private const val WAKE_LOCK_TIMEOUT_MS = 12L * 60L * 60L * 1000L
++        private const val SUSPEND_WAKE_RENEW_MS = 6L * 60L * 60L * 1000L
+         /** proot's tracer: above everything in the guest, under the compositor thread's -8. */
+         private const val TRACER_NICE = -6
+         /** Downloads file whose contents become TU_DEBUG inside the session, e.g. "sysmem". */
+diff --git a/app/src/main/java/com/droiddeck/launcher/session/SessionSuspendController.kt b/app/src/main/java/com/droiddeck/launcher/session/SessionSuspendController.kt
+index 662d44e..cb6cabc 100644
+--- a/app/src/main/java/com/droiddeck/launcher/session/SessionSuspendController.kt
++++ b/app/src/main/java/com/droiddeck/launcher/session/SessionSuspendController.kt
+@@ -10,6 +10,7 @@ internal class SessionSuspendController(
+     private val helperRoots: () -> List<Int>,
+     private val suspendAudio: () -> Unit,
+     private val resumeAudio: () -> Unit,
++    private val recordProcesses: (String, List<Map<String, Any?>>) -> Unit = { _, _ -> },
+ ) {
+     private enum class Role { SESSION_ROOT, SESSION_CHILD, HELPER_ROOT, HELPER_CHILD }
+ 
+@@ -39,6 +40,7 @@ internal class SessionSuspendController(
+             if (frozen.isNotEmpty()) {
+                 val fullyFrozen = frozen.any { it.role == Role.SESSION_ROOT } && frozen.all(::isStoppedOrGone)
+                 if (!fullyFrozen && restore(frozen)) frozen = emptyList()
++                snapshot("freeze_existing", frozen)
+                 completion(fullyFrozen)
+                 return@submit
+             }
+@@ -73,10 +75,12 @@ internal class SessionSuspendController(
+             }
+             if (complete) {
+                 frozen = records.values.toList()
++                snapshot("freeze", frozen)
+                 completion(true)
+             } else {
+                 val restored = restore(records.values.toList())
+                 runAudio(resumeAudio)
++                snapshot("freeze_failed", records.values.toList())
+                 if (!restored) frozen = records.values.toList()
+                 completion(false)
+             }
+@@ -86,8 +90,10 @@ internal class SessionSuspendController(
+     fun resume(completion: (Boolean) -> Unit) {
+         submit {
+             val records = frozen
++            snapshot("resume_before", records)
+             runAudio(resumeAudio)
+             val resumed = restore(records)
++            snapshot("resume_after", records)
+             if (resumed) frozen = emptyList()
+             completion(resumed)
+         }
+@@ -117,6 +123,15 @@ internal class SessionSuspendController(
+         }
+     }
+ 
++    private fun snapshot(stage: String, records: List<ProcessRecord>) {
++        // Already on the controller worker, not the main thread. Diagnostics never alter freeze.
++        runCatching {
++            recordProcesses(stage, records.map {
++                SuspendSurvival.inspect(it.pid, it.started, it.role.name)
++            })
++        }
++    }
++
+     private fun runAudio(action: () -> Unit) {
+         try {
+             action()
+diff --git a/app/src/main/java/com/droiddeck/launcher/ui/ModeSettingsDialog.kt b/app/src/main/java/com/droiddeck/launcher/ui/ModeSettingsDialog.kt
+index c09e407..a2b4e0b 100644
+--- a/app/src/main/java/com/droiddeck/launcher/ui/ModeSettingsDialog.kt
++++ b/app/src/main/java/com/droiddeck/launcher/ui/ModeSettingsDialog.kt
+@@ -311,6 +311,7 @@ fun ModeSettingsPage(s: ModeSettings, a: ModeSettingsActions) {
+                     note = stringResource(if (steam) R.string.mode_suspend_steam_note else R.string.mode_suspend_note),
+                     onPick = a.onSuspendPolicy,
+                 )
++                SuspendSurvivalRow()
+                 if (steam && s.suspendPolicy != SessionPrefs.SUSPEND_NEVER) ToggleRow(
+                     host, "background-downloads", stringResource(R.string.mode_background_downloads),
+                     stringResource(R.string.mode_background_downloads_hint),
+diff --git a/app/src/main/res/values-ja/strings.xml b/app/src/main/res/values-ja/strings.xml
+index 3d333fe..06237ab 100644
+--- a/app/src/main/res/values-ja/strings.xml
++++ b/app/src/main/res/values-ja/strings.xml
+@@ -262,6 +262,8 @@
+     <string name="back_menu_then_qam">メニュー → QAM</string>
+     <string name="back_qam_then_menu">QAM → メニュー</string>
+     <string name="mode_session">セッション</string>
++    <string name="jp_suspend_keepalive">サスペンド中もCPUを起こしておく（実験用）</string>
++    <string name="jp_suspend_keepalive_hint">長時間スリープの比較テスト用です。guest停止中もCPUのWakeLockを保持し、Wi-Fi lockは解放します。待機時の電池消費が増え、プロセスの生存は保証しません。標準はOFF。全モード共通で次回セッション起動から反映します。</string>
+     <string name="mode_suspend">バックグラウンド動作</string>
+     <string name="mode_suspend_hint">アプリが非表示または画面オフ時の動作。</string>
+     <string name="mode_suspend_manual">手動</string>
+diff --git a/app/src/main/res/values/strings.xml b/app/src/main/res/values/strings.xml
+index a240c5a..17e4c8f 100644
+--- a/app/src/main/res/values/strings.xml
++++ b/app/src/main/res/values/strings.xml
+@@ -264,6 +264,8 @@
+     <string name="back_menu_then_qam">Menu → QAM</string>
+     <string name="back_qam_then_menu">QAM → Menu</string>
+     <string name="mode_session">Session</string>
++    <string name="jp_suspend_keepalive">Keep CPU awake while suspended (experimental)</string>
++    <string name="jp_suspend_keepalive_hint">For comparing long sleep failures. Keeps the CPU wake lock while the guest is paused; releases the Wi-Fi lock. Uses more standby battery and does not guarantee process survival. Off by default. Applies to all modes at the next session start.</string>
+     <string name="mode_suspend">Background behavior</string>
+     <string name="mode_suspend_hint">When the app is hidden or the screen turns off.</string>
+     <string name="mode_suspend_manual">Manual</string>
