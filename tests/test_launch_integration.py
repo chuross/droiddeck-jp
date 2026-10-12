@@ -77,8 +77,7 @@ class LaunchIntegrationTest(unittest.TestCase):
     def test_low_memory_on_then_off_restores_original_launch_settings(self):
         original = dict(self.env, LD_PRELOAD="/steam/gameoverlayrenderer.so:/usr/lib/keep.so",
                         WINEDLLOVERRIDES="foo=b", DXVK_CONFIG="dxvk.maxFrameRate = 60",
-                        DXVK_HUD="fps", MANGOHUD="1", FEX_DYNAMICL1CACHE="0", FEX_DISABLEL2CACHE="0",
-                        DROIDDECK_GPU_MEMORY_MB="2048")
+                        DXVK_HUD="fps", MANGOHUD="1", FEX_DYNAMICL1CACHE="0", FEX_DISABLEL2CACHE="0")
         for fallback in (False, True):
             self.env = dict(original, DROIDDECK_LOW_MEMORY="1")
             for _, _, env in self.run_launch(fallback):

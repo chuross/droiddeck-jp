@@ -8,7 +8,7 @@ index 078ae816..ed9d298e 100644
      val all = listOf(
 +        Option("DROIDDECK_LOW_MEMORY_ALLOCATOR", "1", R.string.jp_allocator_hint, Type.TOGGLE, listOf("0", "1")),
 +        Option("DROIDDECK_MEMORY_PROFILER", "0", R.string.jp_memory_profiler_hint, Type.TOGGLE, listOf("0", "1")),
-+        Option("DROIDDECK_GPU_MEMORY_MB", "0", R.string.jp_gpu_memory_hint, Type.CHOICE, listOf("0", "1024", "2048", "3072")),
++        Option("DROIDDECK_GPU_MEMORY_MB", "2048", R.string.jp_gpu_memory_hint, Type.CHOICE, listOf("0", "1024", "2048", "3072")),
          Option("MESA_SHADER_CACHE_DISABLE", "false", R.string.game_env_cache, Type.TOGGLE, listOf("false", "true")),
          Option("VKD3D_FEATURE_LEVEL", "12_2", R.string.game_env_feature, Type.CHOICE, listOf("12_2", "12_1", "12_0", "11_1", "11_0")),
          Option("VKD3D_SHADER_MODEL", "6_9", R.string.game_env_shader, Type.CHOICE, listOf("6_9", "6_8", "6_7", "6_6", "6_5", "6_4", "6_3", "6_2", "6_1", "6_0", "5_1")),
@@ -100,7 +100,7 @@ index 3d333fe9..13c91449 100644
 +    <string name="jp_low_memory">Low Memory モード</string>
 +    <string name="jp_low_memory_hint">Steam・デスクトップ・全アプリ共通の省メモリ設定です。glibc・FEXを省メモリ化し、対応するゲームHUD・Steam Overlayを停止してメモリを記録します。次回セッション起動から反映され、実行中のセッションには反映されません。OFFにすると次回起動時に通常設定へ戻ります。</string>
 +    <string name="jp_memory_profiler_hint">共有設定で有効にすると、読み取れるプロセスのPSSとシステム・swapを5秒ごとに記録。通常プレイでは標準OFF。測定自体がプレイへ影響する場合があります。読取不可のPSSとGPU確保量は不明として扱います。保存先はセッション内のmemory.jsonl。</string>
-+    <string name="jp_gpu_memory_hint">実験用：DXVK DXGIのGPUメモリ申告値（MB、0は変更なし）。Low Memory時に適用。patched ProtonではBudgetも制限し、通常のD3D12＋VKD3D-Proton経路も対象です。ゲームが値を利用する場合のみ効果があり、RAM使用量の上限ではありません。</string>
++    <string name="jp_gpu_memory_hint">実験用：DXVK DXGIのGPUメモリ申告値（MB）。Low Memory時は標準2048MB（未設定・0も2048MB）で、有効な明示値を優先します。patched ProtonではBudgetも制限し、通常のD3D12＋VKD3D-Proton経路も対象です。ゲームが値を利用する場合のみ効果があり、RAM使用量の上限ではありません。</string>
 +    <string name="jp_allocator_hint">Low Memoryモード時、glibcをtop_pad=1MB・arena_max=2・trim_threshold=128KBに設定。共有設定は次回セッションからSteam・gamescope・Xwaylandに、ゲーム別設定は次回起動時に適用。0でallocatorの変更だけ無効にして比較できます。Low MemoryをOFFにして再起動すると従来の設定に戻ります。性能への影響は環境によります。</string>
  </resources>
 diff --git a/app/src/main/res/values/strings.xml b/app/src/main/res/values/strings.xml
@@ -114,7 +114,7 @@ index a240c5ad..2122bd9f 100644
 +    <string name="jp_low_memory">Low Memory Mode</string>
 +    <string name="jp_low_memory_hint">Shared by all Steam, Desktop and app sessions. Saves memory through glibc and FEX settings; disables supported game HUDs and Steam overlays, and records memory. Applies only when starting the next session. Turning it off restores normal settings in the next session.</string>
 +    <string name="jp_memory_profiler_hint">Shared profile: record visible process PSS and system/swap memory every 5 seconds. Off by default during normal play; measurements may affect gameplay. Unreadable PSS and GPU allocations remain unknown. Logs: memory.jsonl in the session folder.</string>
-+    <string name="jp_gpu_memory_hint">Experimental DXVK DXGI reported GPU memory in MB (0: unchanged). Active in Low Memory Mode. Patched Proton also caps budgets, including the normal D3D12 + VKD3D-Proton path. Only games using these values may benefit; this is not a RAM limit.</string>
++    <string name="jp_gpu_memory_hint">Experimental DXVK DXGI reported GPU memory in MB. Low Memory Mode defaults to 2048 MB (also when unset or 0); valid explicit values take priority. Patched Proton also caps budgets, including the normal D3D12 + VKD3D-Proton path. Only games using these values may benefit; this is not a RAM limit.</string>
 +    <string name="jp_allocator_hint">Low Memory Mode: use glibc top_pad=1MB, arena_max=2, trim_threshold=128KB. Shared profile applies to Steam, gamescope and Xwayland at next session; game profile applies at next launch. Set 0 to compare without allocator changes. Turning Low Memory Mode off restores the previous tunables on restart. Performance may vary.</string>
  </resources>
 diff --git a/app/src/test/java/com/droiddeck/launcher/session/GameEnvironmentStoreTest.kt b/app/src/test/java/com/droiddeck/launcher/session/GameEnvironmentStoreTest.kt

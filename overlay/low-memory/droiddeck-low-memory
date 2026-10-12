@@ -87,16 +87,18 @@ def game_environment(env):
             layer for layer in result["VK_INSTANCE_LAYERS"].split(":") if layer != "VK_LAYER_MANGOHUD_overlay")
     overrides = result.get("WINEDLLOVERRIDES", "").strip().rstrip(";")
     result["WINEDLLOVERRIDES"] = (overrides + ";" if overrides else "") + "gameoverlayrenderer,gameoverlayrenderer64=d"
-    # Opt-in DXVK DXGI reported memory; not a physical allocation cap.
+    # Low-memory DXVK DXGI reported memory; not a physical allocation cap.
     # ARM64 Proton also uses DXVK DXGI for D3D12/VKD3D-Proton. The patched DXVK
     # applies these same options to QueryVideoMemoryInfo budgets.
     budget = result.get(GPU, "0")
-    if re.fullmatch(r"[0-9]{1,5}", budget) and 256 <= int(budget) <= 16384:
-        own = result.get("DXVK_CONFIG", "").strip().rstrip(";")
-        options = "dxgi.maxDeviceMemory = %s; dxgi.maxSharedMemory = %s" % (budget, budget)
-        result["DXVK_CONFIG"] = (own + "; " if own else "") + options
-    elif budget != "0":
-        print("low-memory: ignored invalid GPU memory report (256..16384 MB or 0)", file=sys.stderr)
+    if not (isinstance(budget, str) and re.fullmatch(r"[0-9]{1,5}", budget)
+            and 256 <= int(budget) <= 16384):
+        if budget != "0":
+            print("low-memory: invalid GPU memory report; using 2048 MB (valid: 256..16384 MB)", file=sys.stderr)
+        budget = "2048"
+    own = result.get("DXVK_CONFIG", "").strip().rstrip(";")
+    options = "dxgi.maxDeviceMemory = %s; dxgi.maxSharedMemory = %s" % (budget, budget)
+    result["DXVK_CONFIG"] = (own + "; " if own else "") + options
     print("low-memory: game overlay/HUD off, FEX dynamic L1 on/L2 off", file=sys.stderr)
     return result
 
