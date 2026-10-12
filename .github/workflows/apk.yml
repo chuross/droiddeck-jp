@@ -101,7 +101,29 @@ jobs:
       - name: Android unit tests (including test compilation)
         if: steps.plan.outputs.build == 'true'
         working-directory: source/build/DroidDeck
-        run: ./gradlew testDebugUnitTest --console=plain -PskipRust=true -PndkVersion="$DROIDDECK_NDK_VERSION"
+        run: |
+          cat > "$RUNNER_TEMP/droiddeck-tests.gradle" <<'GRADLE'
+          allprojects {
+              tasks.withType(Test).configureEach {
+                  systemProperty 'robolectric.logging', 'stderr'
+                  testLogging {
+                      events 'started', 'failed', 'skipped'
+                      showStandardStreams = true
+                      exceptionFormat = 'full'
+                  }
+              }
+          }
+          GRADLE
+          ./gradlew testDebugUnitTest --console=plain -PskipRust=true -PndkVersion="$DROIDDECK_NDK_VERSION" --init-script "$RUNNER_TEMP/droiddeck-tests.gradle"
+      - name: Preserve failed Android test reports
+        if: failure() && steps.plan.outputs.build == 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: android-test-reports
+          path: |
+            source/build/DroidDeck/app/build/reports/tests/
+            source/build/DroidDeck/app/build/test-results/
+          retention-days: 3
       - name: Prepare native cross-compiler image
         if: steps.plan.outputs.build == 'true'
         working-directory: source/build/DroidDeck
