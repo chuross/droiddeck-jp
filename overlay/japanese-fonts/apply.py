@@ -59,12 +59,17 @@ def bundle_fonts(source):
     # copy into linuxfs assets so the fonts and their license reach the APK.
     script = source / "tools/build_local.sh"
     text = script.read_text()
-    # Install after all build steps and before Gradle packages the assets.
+    # Finalise fonts before runtime attestation; later asset additions invalidate its file set.
     lines = text.splitlines(keepends=True)
     candidates = [i for i, line in enumerate(lines) if re.match(r'^\s*\./gradlew\s+"\$\{gradle_task\}"(?:\s|$)', line)]
     if len(candidates) != 1:
         raise RuntimeError("Gradle packaging changed; review bundled font integration")
-    lines.insert(candidates[0], '''mkdir -p "${linuxfs_dir}/usr/local/share/fonts/droiddeck-patch"
+    records = [i for i, line in enumerate(lines) if line.strip() == "python3 tools/release/runtime_inputs.py record"]
+    if len(records) > 1 or ((source / "tools/release/runtime_inputs.py").exists() and len(records) != 1):
+        raise RuntimeError("Runtime attestation changed; review bundled font integration")
+    if records and records[0] >= candidates[0]:
+        raise RuntimeError("Runtime attestation must precede Gradle packaging")
+    lines.insert(records[0] if records else candidates[0], '''mkdir -p "${linuxfs_dir}/usr/local/share/fonts/droiddeck-patch"
 install -m644 "${repo_root}/tools/linuxfs/overlay/usr/local/share/fonts/droiddeck-patch/"* \\
     "${linuxfs_dir}/usr/local/share/fonts/droiddeck-patch/"
 ''')

@@ -75,6 +75,21 @@ class PrepareTest(unittest.TestCase):
         self.assertIn('install -m644', text)
         subprocess.run(["bash", "-n", str(self.source / "tools/build_local.sh")], check=True)
 
+    def test_fonts_are_finalised_before_runtime_attestation(self):
+        archive = self.font_archive()
+        script = self.bundle(archive, hashlib.sha256(archive).hexdigest(),
+                             'python3 tools/release/runtime_inputs.py record\n./gradlew "${gradle_task}" --console=plain\n')
+        self.assertLess(script.index("install -m644"), script.index("runtime_inputs.py record"))
+        self.assertLess(script.index("runtime_inputs.py record"), script.index("./gradlew"))
+
+    def test_changed_runtime_attestation_hook_is_rejected(self):
+        archive = self.font_archive()
+        verifier = self.source / "tools/release/runtime_inputs.py"
+        verifier.parent.mkdir(parents=True)
+        verifier.write_text("# fixture")
+        with self.assertRaisesRegex(RuntimeError, "Runtime attestation changed"):
+            self.bundle(archive, hashlib.sha256(archive).hexdigest(), './gradlew "${gradle_task}"\n')
+
     def test_ambiguous_packaging_hook_is_rejected(self):
         archive = self.font_archive()
         with self.assertRaisesRegex(RuntimeError, "Gradle packaging changed"):
