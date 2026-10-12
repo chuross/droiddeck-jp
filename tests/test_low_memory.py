@@ -153,7 +153,7 @@ class LowMemoryTest(unittest.TestCase):
     def test_native_session_allocator_on_off_and_ab_toggle(self):
         source = Path(os.environ["DROIDDECK_PATCH_SOURCE"])
         script = (source / "tools/linuxfs/overlay/usr/local/bin/droiddeck-session").read_text()
-        hook = script.split("# Shared low-memory settings", 1)[1].split("# Until the runtime is stable", 1)[0]
+        hook = script.split("# Shared low-memory settings", 1)[1].split("collect_steam_logs() {", 1)[0]
         hook = "# Shared low-memory settings" + hook
         hook = hook.replace("/usr/local/bin/droiddeck-low-memory", str(source / "tools/linuxfs/overlay/usr/local/bin/droiddeck-low-memory"))
         keys = ("GLIBC_TUNABLES", LOW["BASE_GLIBC"], LOW["LOW_GLIBC"])

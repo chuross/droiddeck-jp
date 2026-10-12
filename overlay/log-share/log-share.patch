@@ -1,20 +1,30 @@
 --- a/app/src/main/java/com/droiddeck/launcher/session/SessionArtifacts.kt
 +++ b/app/src/main/java/com/droiddeck/launcher/session/SessionArtifacts.kt
-@@ -31,185 +31,56 @@
-     /** Written last; a folder without it did not get its ending. */
+@@ -32,24 +32,20 @@
      const val COMPLETE_MARKER = ".complete"
  
--    /** Every file in the folder has been through the redactor, own addresses and accounts included (-2: accounts added). */
--    private const val SCRUBBED_MARKER = ".scrubbed-2"
--
+-    /**
+-     * Every file in the folder has been through the redactor under its current rules. Named after
+-     * [LogRedactor.RULES_VERSION], so a folder scrubbed under older rules is scrubbed again.
+-     */
+-    private val SCRUBBED_MARKER = ".scrubbed-r${LogRedactor.RULES_VERSION}"
+     private val OLD_SCRUBBED_MARKER = Regex("""\.scrubbed-(r?\d+)""")
+ 
 -    /**
 -     * Written by a session's own ending, and only when every file in the folder, subfolders
 -     * included (whatever the session script copied into steam/ and droiddeck-esync/ as well as what
 -     * the app wrote), went through the redactor without a failure. It lists each of those files
--     * with its size and modification time, under the redactor's rules version: a share copies a
--     * file as it is only when all three still match ([scrubbedFiles]), and scrubs anything else -
--     * a file added or changed since, a hidden one, or every file of a folder without it.
+-     * with its size and modification time, under the redactor's rules version ([scrubbedFiles]).
+-     * A share no longer relies on it: every text file goes through the share pass on the way into
+-     * the zip regardless.
 -     */
++    fun unmarkMoved(dirs: List<File>) {
++        dirs.filter { SessionPaths.isSessionFolder(it) }.forEach { dir ->
++            dir.listFiles { f -> OLD_SCRUBBED_MARKER.matches(f.name) || f.name == SCRUBBED_TREE_MARKER }?.forEach { it.delete() }
++        }
++    }
++
++
 +    // Legacy marker retained for readers/tests; it is no longer trusted for sharing.
      const val SCRUBBED_TREE_MARKER = ".scrubbed-tree"
  
@@ -25,8 +35,7 @@
 +        bestEffort("compositor log") {
              val wayland = File(dir, "wayland.log")
              if (!wayland.exists()) {
-                 WaylandCompositor.currentLogFile()?.takeIf { it.isFile }?.let { src ->
-                     src.copyTo(wayland, overwrite = true)
+@@ -58,177 +54,22 @@
                  }
              }
 -            LogRedactor.learnFromRuntime(LinuxRuntime.rootDir(context))
@@ -50,28 +59,52 @@
      }
  
 -    /**
--     * Once, for session folders written before every file was scrubbed and before the device's own
--     * addresses were (network.txt listed them; the client's IPv6 check logs "external address"
--     * into steam/connection_log.txt): the whole folder, steam/ included, through the redactor.
--     * A marker records it. Runs at app start with [finishAbandoned].
+-     * Every session folder not yet scrubbed under the redactor's current rules - written before
+-     * every file was scrubbed, before the device's own addresses or the Steam account were, or
+-     * moved in from Download/ ([LogMigration] strips their markers first, [unmarkMoved]): the
+-     * whole folder, steam/ and every other subfolder included, through the redactor, and the
+-     * current marker written in place of the old ones. Runs at app start with [finishAbandoned].
+-     *
+-     * A folder holds some 30 MB of Steam logs, about half a minute's work, so folders go through
+-     * a few at a time; one the process does not get to keeps its old marker and is taken up at
+-     * the next start.
 -     */
 -    @Synchronized
 -    fun scrubOlder(context: Context) {
 -        val current = SessionPaths.current()
--        val dirs = LinuxRuntime.debugLogDir().listFiles { f ->
+-        val dirs = LinuxRuntime.logDir(context).listFiles { f ->
 -            SessionPaths.isSessionFolder(f) && f != current && !File(f, SCRUBBED_MARKER).exists()
--        } ?: return
+-        }?.toList() ?: return
 -        if (dirs.isEmpty()) return
 -        LogRedactor.learnFromRuntime(LinuxRuntime.rootDir(context))
--        dirs.forEach { dir ->
--            Record(dir).let { r -> scrubFolder(dir, r); File(dir, "steam").takeIf { it.isDirectory }?.let { scrubFolder(it, r) } }
--            try { File(dir, SCRUBBED_MARKER).writeText("scrubbed ${now()}\n") } catch (e: Exception) {}
+-        val workers = (Runtime.getRuntime().availableProcessors() / 2).coerceIn(1, 4)
+-        val pool = java.util.concurrent.Executors.newFixedThreadPool(workers) { r ->
+-            Thread({ android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND); r.run() }, "scrub-logs")
 -        }
--        Log.i(TAG, "scrubbed ${dirs.size} older session folder(s)")
+-        val done = try {
+-            pool.invokeAll(dirs.map { dir -> java.util.concurrent.Callable { scrubAndMark(dir) } })
+-                .count { f -> try { f.get() } catch (e: Exception) { false } }
+-        } finally {
+-            pool.shutdown()
+-        }
+-        val failed = dirs.size - done
+-        Log.i(TAG, "logs: scrubbed $done folders under r${LogRedactor.RULES_VERSION}" +
+-            if (failed > 0) ", $failed not fully (again at the next start)" else "")
 +    private inline fun bestEffort(label: String, block: () -> Unit) {
 +        runCatching(block).onFailure { runCatching { Log.w(TAG, "could not collect $label", it) } }
      }
  
+-    /**
+-     * Folders [LogMigration] just moved in lose every scrub marker an earlier build left, so
+-     * [scrubOlder], which runs right after it, puts them through the current rules whatever those
+-     * markers claimed.
+-     */
+-    fun unmarkMoved(dirs: List<File>) {
+-        dirs.filter { SessionPaths.isSessionFolder(it) }.forEach { dir ->
+-            dir.listFiles { f -> OLD_SCRUBBED_MARKER.matches(f.name) || f.name == SCRUBBED_TREE_MARKER }?.forEach { it.delete() }
+-        }
+-    }
+-
 -    /**
 -     * The session's own files (session.log, app.log, desktop.log, the Steam desktop client's
 -     * steam-desktop.log, ...) were written as they happened, unscrubbed; this pass puts every one
@@ -80,17 +113,13 @@
 -     */
 -    /** A file's size and modification time as they stood right after it was scrubbed. */
 -    private class Scrubbed(val length: Long, val modified: Long)
-+    /** Redaction belongs to a private share snapshot, never to a source inode with writers. */
-+    fun scrubOlder(context: Context) = Unit
- 
+-
 -    /** Files of a folder as they stood right after scrubbing, filled by [scrubTree] and [copySteamLogs]. */
 -    private class Record(val dir: File) {
 -        val files = HashMap<File, Scrubbed>()
 -        var failed = false
 -    }
-+    /** Size/mtime markers cannot prove that a concurrently replaced file is safe to share. */
-+    fun scrubbedFiles(dir: File): Set<String> = emptySet()
- 
+-
 -    private fun scrubFolder(dir: File, record: Record) {
 -        dir.listFiles { f -> f.isFile && !f.name.startsWith(".") && f !in record.files }?.forEach { f ->
 -            if (!LogRedactor.isText(f)) return@forEach
@@ -132,15 +161,17 @@
 -     * Records [record]'s folder as scrubbed - every file went through without a failure - or
 -     * leaves it unmarked, so the next share and the pass over older folders scrub it again.
 -     */
--    private fun markScrubbed(record: Record) {
+-    private fun markScrubbed(record: Record): Boolean {
 -        val dir = record.dir
 -        val tree = File(dir, SCRUBBED_TREE_MARKER)
+-        // A marker from older rules vouches for nothing now, whether or not this pass succeeded.
+-        dir.listFiles { f -> OLD_SCRUBBED_MARKER.matches(f.name) }?.forEach { it.delete() }
 -        if (record.failed) {
 -            tree.delete()
 -            Log.w(TAG, "$dir is not fully scrubbed; it is scrubbed again when shared")
--            return
+-            return false
 -        }
--        try {
+-        return try {
 -            File(dir, SCRUBBED_MARKER).writeText("scrubbed ${now()}\n")
 -            val lines = StringBuilder("rules ${LogRedactor.RULES_VERSION}\n")
 -            record.files.forEach { (f, s) ->
@@ -148,8 +179,11 @@
 -                    .append(f.relativeTo(dir).path).append('\n')
 -            }
 -            tree.writeText(lines.toString())
+-            true
 -        } catch (e: Exception) {
 -            tree.delete()
+-            File(dir, SCRUBBED_MARKER).delete()
+-            false
 -        }
 -    }
 -
@@ -170,9 +204,8 @@
 -        }.toSet()
 -    }
 -
--    /** The end-of-session scrub of [dir] on its own (steam/ already in place), for tests. */
--    @androidx.annotation.VisibleForTesting
--    internal fun scrubAndMark(dir: File) = markScrubbed(scrubTree(Record(dir)))
+-    /** The end-of-session scrub of [dir] on its own (steam/ already in place); also the pass over older and moved folders. */
+-    internal fun scrubAndMark(dir: File): Boolean = markScrubbed(scrubTree(Record(dir)))
 -
 -    /**
 -     * [record]'s folder and every folder under it (steam/, droiddeck-esync/): the session script
@@ -191,7 +224,7 @@
 +    private fun copySteamLogs(context: Context, dir: File) {
          val logs = File(LinuxRuntime.rootDir(context), "root/.local/share/Steam/logs")
          if (!logs.isDirectory) return
-         val out = File(dir, "steam").apply { mkdirs() }
+@@ -236,11 +77,12 @@
          logs.listFiles { f -> f.isFile && f.length() < 8L * 1024 * 1024 }?.forEach { src ->
              try {
 -                val dst = File(out, src.name)
@@ -211,20 +244,16 @@
 +                runCatching { Log.w(TAG, "could not scrub ${src.name}", e) }
              }
          }
-         Log.i(TAG, "collected ${out.listFiles()?.size ?: 0} Steam log(s), scrubbed, into $out")
-@@ -223,6 +94,10 @@
-      */
+@@ -256,4 +98,8 @@
      @Synchronized
      fun finishAbandoned(context: Context) {
 +        bestEffort("abandoned sessions") { recoverAbandoned(context) }
 +    }
 +
 +    private fun recoverAbandoned(context: Context) {
-         val parent = LinuxRuntime.debugLogDir()
+         val parent = LinuxRuntime.logDir(context)
          val abandoned = parent.listFiles { f ->
-             SessionPaths.isSessionFolder(f) && !File(f, COMPLETE_MARKER).exists()
-@@ -244,16 +119,15 @@
-                         "crash.log holds Android's crash buffer as of the next app start - if this\n" +
+@@ -277,14 +123,13 @@
                          "session died of a crash, the entry is in there unless the device rebooted.\n"
                  )
 -                val record = Record(dir)
@@ -244,20 +273,52 @@
 +                runCatching { Log.w(TAG, "could not finish $dir", e) }
              }
          }
+--- a/app/src/main/java/com/droiddeck/launcher/session/SessionEvents.kt
++++ b/app/src/main/java/com/droiddeck/launcher/session/SessionEvents.kt
+@@ -61,11 +61,11 @@
+         val target = if (directory == null) SessionState.eventsFile ?: File(dir, "events.jsonl")
+             else File(dir, "events.jsonl")
+-        val payload = JSONObject()
+-            .put("t", System.currentTimeMillis())
+-            .put("event", event)
+-            .put("sessionId", dir.name)
+-        fields.forEach { (key, value) -> payload.put(key, value ?: JSONObject.NULL) }
++        try {
++            val payload = JSONObject()
++                .put("t", System.currentTimeMillis())
++                .put("event", event)
++                .put("sessionId", dir.name)
++            fields.forEach { (key, value) -> payload.put(key, value ?: JSONObject.NULL) }
+ 
+-        try {
+             synchronized(lock) {
+                 target.parentFile?.mkdirs()
+@@ -74,6 +74,6 @@
+                 }
+             }
+-        } catch (e: Exception) {
+-            Log.w(TAG, "writing ${target.name}", e)
++        } catch (e: Throwable) {
++            runCatching { Log.w(TAG, "writing ${target.name}", e) }
+         }
      }
 --- a/app/src/main/java/com/droiddeck/launcher/session/SessionLogShare.kt
 +++ b/app/src/main/java/com/droiddeck/launcher/session/SessionLogShare.kt
-@@ -42,7 +42,7 @@
-         progress = 0f
+@@ -23,5 +23,5 @@
+  * sheet. Logs live in app-private `files/logs`; this is how they leave the device. Every text file
+  * goes through [LogRedactor.redactForShare] on the way in, so even a file written before a rule
+- * existed is clean in the zip. The zip sits in `cache/share/` until the next share or app start.
++ * existed is clean in the zip. The zip sits in `cache/share/` until the next app start.
+  */
+ object SessionLogShare {
+@@ -45,5 +45,5 @@
          Thread({
              val zip = runCatching { folder()?.let { dir -> zipFolder(context, dir) { p -> main.post { if (progress != null) progress = p } } } }
 -                .onFailure { Log.w("SessionLogShare", "could not package session logs", it) }
 +                .onFailure { runCatching { Log.w("SessionLogShare", "could not package session logs", it) } }
                  .getOrNull()
              main.post { progress = null; done(zip) }
-         }, "share-logs").start()
-@@ -56,48 +56,63 @@
-     /** Builds a zip for one specific session folder (blocking). */
+@@ -59,51 +59,64 @@
      fun zipFolder(context: Context, folder: File, onProgress: ((Float) -> Unit)? = null): File? {
          if (!folder.isDirectory) return null
 -        // The client's logs past STEAM_LOG_MAX_BYTES stay out, as they do from the app's own copy: a
@@ -266,7 +327,7 @@
 -        val files = folder.walkTopDown().filter { it.isFile }
 -            .filterNot { it.parentFile?.name == "steam" && it.length() > STEAM_LOG_MAX_BYTES }.toList()
 -        if (files.isEmpty()) return null
--        val out = File(context.cacheDir, "shared-logs").apply { deleteRecursively(); mkdirs() }
+-        val out = shareDir(context).apply { deleteRecursively(); mkdirs() }
 -        val zip = File(out, "DroidDeck-${folder.name}.zip")
 -        // Scrubbed on the way into the zip: a session shared while it runs has not had its end-of-
 -        // session pass yet, and the redactor changes nothing in a line that is already clean.
@@ -275,9 +336,11 @@
 -        // since, goes in as it is; anything else (added or changed since, hidden, or any file of a
 -        // session still running) is scrubbed again. Scrubbing tens of MB of the client's logs on
 -        // every share kept the share sheet from appearing for ten seconds or more.
--        val scrubbed = SessionArtifacts.scrubbedFiles(folder)
 -        val live = liveSteamLogs(context, folder)
--        val total = (files + live).sumOf { it.length() }.coerceAtLeast(1L)
+-        val logs = LinuxRuntime.logDir(context)
+-        val stores = recent(File(logs, STORES_DIR))
+-        val tools = recent(File(logs, SessionPaths.TOOLS_DIR))
+-        val total = (files + live + stores + tools).sumOf { it.length() }.coerceAtLeast(1L)
 -        var done = 0L
 -        var shown = -1
 -        fun advance(f: File) {
@@ -286,12 +349,14 @@
 -            if (percent != shown) { shown = percent; onProgress?.invoke(percent / 100f) }
 -        }
 -        ZipOutputStream(zip.outputStream().buffered()).use { z ->
--            files.forEach { f -> addEntry(z, folder.name + "/" + f.relativeTo(folder).path, f, f.relativeTo(folder).path in scrubbed); advance(f) }
--            live.forEach { f -> addEntry(z, folder.name + "/steam/" + f.name, f, false); advance(f) }
+-            files.forEach { f -> addEntry(z, folder.name + "/" + f.relativeTo(folder).path, f); advance(f) }
+-            live.forEach { f -> addEntry(z, folder.name + "/steam/" + f.name, f); advance(f) }
+-            stores.forEach { f -> addEntry(z, "$STORES_DIR/" + f.name, f); advance(f) }
+-            tools.forEach { f -> addEntry(z, SessionPaths.TOOLS_DIR + "/" + f.name, f); advance(f) }
 -        }
 -        return zip
 +        diagnostic(folder, "share.started")
-+        val out = File(context.cacheDir, "shared-logs").apply { mkdirs() }
++        val out = shareDir(context).apply { mkdirs() }
 +        // Concurrent callers and a previous share Intent must not delete each other's archive.
 +        val zip = File.createTempFile("DroidDeck-${folder.name}-", ".zip", out)
 +        val staging = File.createTempFile(".share-", ".tmp", out)
@@ -305,7 +370,10 @@
 +            val names = files.map { it.second }.toSet()
 +            val live = liveSteamLogs(context, folder).map { it to (folder.name + "/steam/" + it.name) }
 +                .filterNot { it.second in names }
-+            val entries = files + live
++            val logs = LinuxRuntime.logDir(context)
++            val stores = recent(File(logs, STORES_DIR)).map { it to ("$STORES_DIR/" + it.name) }
++            val tools = recent(File(logs, SessionPaths.TOOLS_DIR)).map { it to (SessionPaths.TOOLS_DIR + "/" + it.name) }
++            val entries = files + live + stores + tools
 +            if (entries.isEmpty()) { zip.delete(); return null }
 +            val sizes = entries.map { it.first.length() }
 +            val total = sizes.sum().coerceAtLeast(1L)
@@ -316,7 +384,7 @@
 +                entries.forEachIndexed { index, (source, name) ->
 +                    // Complete redaction before opening an entry: failures skip only this file,
 +                    // never leave a partly redacted entry or fall back to sharing raw credentials.
-+                    val ready = runCatching { SessionLogSnapshot.redact(source, staging) }
++                    val ready = runCatching { SessionLogSnapshot.redact(source, staging, LogRedactor::redactForShare) }
 +                        .onFailure {
 +                            runCatching { Log.w("SessionLogShare", "could not snapshot ${source.name}", it) }
 +                            diagnostic(folder, "share.file_skipped", mapOf("file" to source.name,
@@ -341,11 +409,12 @@
 +        } finally { staging.delete() }
      }
  
--    private fun addEntry(z: ZipOutputStream, name: String, f: File, scrubbed: Boolean) {
+-    private fun addEntry(z: ZipOutputStream, name: String, f: File) {
 -        z.putNextEntry(ZipEntry(name))
--        if (!scrubbed && LogRedactor.isText(f)) {
+-        // Every text file, every time: the folder's own scrub may predate a rule.
+-        if (LogRedactor.isText(f)) {
 -            val w = z.bufferedWriter()
--            LogRedactor.scrubTo(f, w)
+-            LogRedactor.scrubForShare(f, w)
 -            w.flush()
 -        } else {
 -            f.inputStream().use { it.copyTo(z) }
@@ -358,61 +427,27 @@
 -        z.closeEntry()
      }
  
-     /**
---- a/app/src/main/java/com/droiddeck/launcher/session/SessionEvents.kt
-+++ b/app/src/main/java/com/droiddeck/launcher/session/SessionEvents.kt
-@@ -61,9 +61,9 @@
-             else File(dir, "events.jsonl")
--        val payload = JSONObject()
--            .put("t", System.currentTimeMillis())
--            .put("event", event)
--            .put("sessionId", dir.name)
--        fields.forEach { (key, value) -> payload.put(key, value ?: JSONObject.NULL) }
-+        try {
-+            val payload = JSONObject()
-+                .put("t", System.currentTimeMillis())
-+                .put("event", event)
-+                .put("sessionId", dir.name)
-+            fields.forEach { (key, value) -> payload.put(key, value ?: JSONObject.NULL) }
- 
--        try {
-             synchronized(lock) {
-@@ -74,4 +74,4 @@
-             }
--        } catch (e: Exception) {
--            Log.w(TAG, "writing ${target.name}", e)
-+        } catch (e: Throwable) {
-+            runCatching { Log.w(TAG, "writing ${target.name}", e) }
-         }
 --- a/app/src/test/java/com/droiddeck/launcher/session/SessionLogShareTest.kt
 +++ b/app/src/test/java/com/droiddeck/launcher/session/SessionLogShareTest.kt
-@@ -33,12 +33,12 @@
-             "rules $rules\n" + files.joinToString("") { val f = File(folder, it); "${f.length()}\t${f.lastModified()}\t$it\n" })
+@@ -34,8 +34,7 @@
      }
  
--    @Test fun aRecordedUnchangedFileGoesInAsItIs() {
+-    @Test fun aRecordedUnchangedFileIsScrubbedAgainOnTheWayIntoTheZip() {
 +    @Test fun aRecordedUnchangedFileIsStillRedacted() {
          val folder = tmp.newFolder("2026-10-06-01-steam")
--        // Stands in for a file the ending scrubbed; the share must not pass it through again.
+-        // A file the ending recorded as scrubbed still gets the share's final pass: the record
+-        // may predate a rule, and a zip is the one way a log leaves the device.
 +        // A legacy size/mtime record must never bypass redaction.
          File(folder, "session.log").writeText("$secret\n")
          record(folder, "session.log")
--        assertTrue(zip(folder).getValue("session.log").contains(leaked))
-+        assertFalse(zip(folder).getValue("session.log").contains(leaked))
-     }
- 
-     @Test fun anythingTheRecordDoesNotVouchForIsScrubbed() {
-@@ -88,7 +88,7 @@
-         assertFalse(out.getValue("steam/console_log.txt").contains(leaked))
+@@ -90,5 +89,5 @@
      }
  
 -    @Test fun theEndingScrubsEveryFolderAndRecordsWhatItScrubbed() {
 +    @Test fun theEndingLeavesSourceLogsAndOpenWritersIntact() {
          val folder = tmp.newFolder("2026-10-06-05-steam")
          File(folder, "session.log").writeText("$secret\n")
-         File(folder, "droiddeck-esync").mkdirs()
-@@ -96,22 +96,21 @@
-         File(folder, "steam/deep").mkdirs()
+@@ -98,20 +97,19 @@
          File(folder, "steam/deep/nested.txt").writeText("$secret\n")
  
 -        SessionArtifacts.scrubAndMark(folder)
@@ -423,7 +458,7 @@
 -        assertEquals(setOf("session.log", "droiddeck-esync/launches.log", "steam/deep/nested.txt"),
 -            SessionArtifacts.scrubbedFiles(folder))
 +            assertTrue(name, File(folder, name).readText().contains(leaked))
-+        assertTrue(SessionArtifacts.scrubbedFiles(folder).isEmpty())
++        assertFalse(File(folder, SessionArtifacts.SCRUBBED_TREE_MARKER).exists())
          assertTrue(zip(folder).values.none { it.contains(leaked) })
      }
  
@@ -439,4 +474,88 @@
 +            SessionArtifacts.collect(RuntimeEnvironment.getApplication(), folder, "test stop")
          } finally {
              folder.setWritable(true)
-         }
+@@ -119,5 +117,5 @@
+         assertTrue(File(folder, "session.log").readText().contains(leaked))
+         assertFalse(File(folder, SessionArtifacts.SCRUBBED_TREE_MARKER).exists())
+-        assertTrue(SessionArtifacts.scrubbedFiles(folder).isEmpty())
++        assertFalse(File(folder, SessionArtifacts.SCRUBBED_TREE_MARKER).exists())
+         assertTrue(zip(folder).values.none { it.contains(leaked) })
+     }
+--- a/app/src/main/java/com/droiddeck/launcher/MainActivity.kt
++++ b/app/src/main/java/com/droiddeck/launcher/MainActivity.kt
+@@ -913,5 +913,4 @@
+             SessionLogShare.clear(this)
+             SessionArtifacts.finishAbandoned(this)
+-            SessionArtifacts.scrubOlder(this)
+             SessionArtifacts.prune(this)
+         }, "finish-abandoned").start()
+--- a/app/src/test/java/com/droiddeck/launcher/session/SessionLogShareZipTest.kt
++++ b/app/src/test/java/com/droiddeck/launcher/session/SessionLogShareZipTest.kt
+@@ -56,5 +56,5 @@
+     // Folders an earlier build scrubbed and marked under older rules, their copied Steam UI log
+     // still naming the account: one app start (the move out of Download/, then the pass over
+-    // older folders) leaves every one scrubbed on disk under the current rules.
++    // older folders) must leave the source intact and redact the shared copies.
+     private fun olderFolder(parent: File, name: String, marker: String = ".scrubbed-2"): File {
+         val dir = File(parent, name).apply { mkdirs() }
+@@ -70,23 +70,26 @@
+     }
+ 
+-    private fun assertScrubbed(dir: File) {
+-        val text = File(dir, "steam/webhelper_js.txt").readText()
++    private fun assertSharedScrubbed(dir: File) {
++        val source = File(dir, "steam/webhelper_js.txt")
++        val original = source.readText()
++        val text = ZipFile(SessionLogShare.zipFolder(app, dir)!!).use { archive ->
++            archive.getInputStream(archive.getEntry("${dir.name}/steam/webhelper_js.txt"))
++                .bufferedReader().readText()
++        }
++        assertEquals(original, source.readText())
++        assertTrue(original.contains("maskeduser42"))
+         for (secret in listOf("someone.masked", "example.com", "maskeduser42")) assertFalse("$secret survived in $dir", text.contains(secret))
+         assertTrue(text.contains("Login: OnLoginStateChange <redacted:account> 2 1 0 0"))
+         assertTrue(text.contains("Login: OnLoginStateChange  0 1 0 0"))
+         assertTrue(text.contains("code=c0000005"))
+-        val markers = dir.list()!!.filter { it.startsWith(".scrubbed-") && it != SessionArtifacts.SCRUBBED_TREE_MARKER }
+-        assertEquals("$dir", listOf(".scrubbed-r${com.droiddeck.launcher.core.LogRedactor.RULES_VERSION}"), markers)
+-        assertTrue(File(dir, SessionArtifacts.SCRUBBED_TREE_MARKER).readText()
+-            .startsWith("rules ${com.droiddeck.launcher.core.LogRedactor.RULES_VERSION}\n"))
++
+     }
+ 
+-    @Test fun aFolderMarkedUnderOlderRulesIsScrubbedAgainAtStart() {
++    @Test fun aFolderMarkedUnderOlderRulesIsRedactedOnlyInItsShareCopy() {
+         val dir = olderFolder(LinuxRuntime.logDir(app), "2026-10-01-01-steam")
+-        SessionArtifacts.scrubOlder(app)
+-        assertScrubbed(dir)
++        assertSharedScrubbed(dir)
+     }
+ 
+-    @Test fun everyMigratedFolderIsScrubbedUnderTheCurrentRulesInOneStart() {
++    @Test fun everyMigratedFolderKeepsItsSourceAndSharesUnderCurrentRules() {
+         val legacy = LinuxRuntime.legacyLogDir().apply { mkdirs() }
+         val names = (1..9).map { "2026-10-0${it}-01-steam" }
+@@ -99,8 +102,11 @@
+         // What MainActivity runs at start.
+         LogMigration.run(app)
+-        SessionArtifacts.scrubOlder(app)
+ 
+         val logs = LinuxRuntime.logDir(app)
+-        for (name in names) assertScrubbed(File(logs, name))
++        for (name in names) {
++            val folder = File(logs, name)
++            assertSharedScrubbed(folder)
++            assertTrue(folder.list()!!.none { it.startsWith(".scrubbed-") })
++        }
+         assertEquals(listOf("Saves"), legacy.list()!!.toList())
+     }
+--- a/app/src/main/java/com/droiddeck/launcher/session/LogMigration.kt
++++ b/app/src/main/java/com/droiddeck/launcher/session/LogMigration.kt
+@@ -11,5 +11,6 @@
+  * tool logs that earlier builds left in `Download/DroidDeck/` move into `files/logs/`. Best effort:
+  * an item that cannot be moved stays where it is. Moved session folders lose their old scrub markers
+- * ([SessionArtifacts.unmarkMoved]), so [SessionArtifacts.scrubOlder] scrubs them under the current rules. Nothing else in that folder is touched - game
++ * ([SessionArtifacts.unmarkMoved]); sharing redacts private copies under the current rules.
++ * Nothing else in that folder is touched - game
+  * save backups (Saves/) stay public - and after this pass the app never reads it again.
+  */

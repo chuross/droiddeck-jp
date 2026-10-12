@@ -101,7 +101,7 @@ jobs:
       - name: Android unit tests (including test compilation)
         if: steps.plan.outputs.build == 'true'
         working-directory: source/build/DroidDeck
-        run: ./gradlew testDebugUnitTest --console=plain -PndkVersion="$DROIDDECK_NDK_VERSION"
+        run: ./gradlew testDebugUnitTest --console=plain -PskipRust=true -PndkVersion="$DROIDDECK_NDK_VERSION"
       - name: Prepare native cross-compiler image
         if: steps.plan.outputs.build == 'true'
         working-directory: source/build/DroidDeck

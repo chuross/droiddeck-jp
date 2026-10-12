@@ -113,6 +113,34 @@ class LogShareLifecycleTest {
         } finally { SessionState.running = false }
     }
 
+    @Test fun includesRecentStoresAndToolsWithUpstreamSharePrivacyRules() {
+        val context = RuntimeEnvironment.getApplication()
+        val folder = tmp.newFolder("2026-10-12-05-steam")
+        File(folder, "events.jsonl").writeText("{\"event\":\"initial\"}\n")
+        val logs = com.droiddeck.launcher.runtime.LinuxRuntime.logDir(context)
+        val stores = File(logs, SessionLogShare.STORES_DIR).apply { mkdirs() }
+        val tools = File(logs, SessionPaths.TOOLS_DIR).apply { mkdirs() }
+        val store = File(stores, "recent-store.log").apply { writeText("address 192.168.1.42\n") }
+        val tool = File(tools, "recent-tool.log").apply { writeText("url https://example.org/a?private=value\n") }
+        val expired = File(stores, "expired-store.log").apply {
+            writeText("old log\n")
+            setLastModified(System.currentTimeMillis() - 8 * 86_400_000L)
+        }
+        try {
+            ZipFile(SessionLogShare.zipFolder(context, folder)!!).use { archive ->
+                val storeEntry = archive.getEntry("stores/${store.name}")
+                val toolEntry = archive.getEntry("tools/${tool.name}")
+                assertNotNull(storeEntry)
+                assertNotNull(toolEntry)
+                assertNull(archive.getEntry("stores/${expired.name}"))
+                assertFalse(archive.getInputStream(storeEntry).bufferedReader().readText().contains("192.168.1.42"))
+                assertFalse(archive.getInputStream(toolEntry).bufferedReader().readText().contains("private=value"))
+            }
+            assertTrue(store.readText().contains("192.168.1.42"))
+            assertTrue(tool.readText().contains("private=value"))
+        } finally { store.delete(); tool.delete(); expired.delete() }
+    }
+
     @Test fun simultaneousSharesKeepBothArchivesAndExcludeDiagnosticTemporaries() {
         val context = RuntimeEnvironment.getApplication()
         val folder = tmp.newFolder("2026-10-12-03-steam")

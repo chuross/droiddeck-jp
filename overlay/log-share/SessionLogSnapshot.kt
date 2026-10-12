@@ -28,7 +28,7 @@ internal object SessionLogSnapshot {
     }
 
     /** Open before measuring: rename by a collector cannot change the inode being read. */
-    fun redact(source: File, destination: File) {
+    fun redact(source: File, destination: File, redactLine: (String) -> String = LogRedactor::redact) {
         FileInputStream(source).use { input ->
             val prefix = Prefix(input, input.channel.size()).buffered()
             prefix.mark(4096)
@@ -44,7 +44,7 @@ internal object SessionLogSnapshot {
                 prefix.reader(Charsets.UTF_8).buffered().use { reader ->
                     val line = StringBuilder()
                     fun emit() {
-                        out.write(LogRedactor.redact(line.toString().removeSuffix("\r")))
+                        out.write(redactLine(line.toString().removeSuffix("\r")))
                         out.write("\n")
                         line.setLength(0)
                     }

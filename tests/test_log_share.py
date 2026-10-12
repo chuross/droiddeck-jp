@@ -42,7 +42,7 @@ class LogShareIntegrationTest(unittest.TestCase):
 
     def test_source_drift_is_rejected_before_helpers_are_installed(self):
         target = self.source / "app/src/main/java/com/droiddeck/launcher/session/SessionLogShare.kt"
-        target.write_text(target.read_text().replace("val scrubbed = SessionArtifacts.scrubbedFiles(folder)", "upstreamChanged()"))
+        target.write_text(target.read_text().replace("val live = liveSteamLogs(context, folder)", "upstreamChanged()"))
         before = target.read_text()
         with self.assertRaisesRegex(RuntimeError, "integration changed"):
             APPLY.apply(self.source)
