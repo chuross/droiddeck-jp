@@ -1,9 +1,10 @@
 name: Build and publish ARM64 Proton DroidDeck patches
 
 on:
-  push:
+  workflow_run:
+    workflows: ['Build and publish DroidDeck Patch APK']
+    types: [completed]
     branches: [main]
-    paths: ['overlay/proton-ntcontext/**', 'tests/test_proton_ntcontext.py', '.github/workflows/proton.yml']
   workflow_dispatch:
   schedule:
     - cron: '47 0 * * *'
@@ -17,7 +18,12 @@ concurrency:
 
 jobs:
   build:
-    if: github.ref == 'refs/heads/main'
+    if: >-
+      github.ref == 'refs/heads/main' &&
+      (github.event_name != 'workflow_run' ||
+       (github.event.workflow_run.conclusion == 'success' &&
+        github.event.workflow_run.head_branch == 'main' &&
+        github.event.workflow_run.repository.full_name == github.repository))
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 120
     permissions:

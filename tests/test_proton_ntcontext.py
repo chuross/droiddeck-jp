@@ -513,6 +513,7 @@ class ExperimentalReleaseTest(unittest.TestCase):
         self.lock = plan["lock"]
         complete = self.published(plan)
         self.assertFalse(self.plan(existing=complete)["build"])
+        self.assertFalse(self.plan("workflow_run", complete)["build"])
         for event in ("push", "workflow_dispatch"):
             self.assertTrue(self.plan(event, complete)["build"])
 
@@ -521,6 +522,7 @@ class ExperimentalReleaseTest(unittest.TestCase):
         for changed in (dict(complete, isDraft=True), dict(complete, assets=complete["assets"][:-1]),
                         dict(complete, body="previous source"), None):
             self.assertTrue(self.plan(existing=changed)["build"])
+            self.assertTrue(self.plan("workflow_run", changed)["build"])
 
     def test_unrecorded_candidate_retries_even_if_publication_completed(self):
         plan = self.plan()

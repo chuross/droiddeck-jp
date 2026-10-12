@@ -277,7 +277,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("action", choices=("plan", "publish"))
     parser.add_argument("--repository", required=True)
-    parser.add_argument("--event", choices=("push", "schedule", "workflow_dispatch"))
+    parser.add_argument("--event", choices=("push", "schedule", "workflow_dispatch", "workflow_run"))
     parser.add_argument("--manager")
     parser.add_argument("--plan", type=Path, default=Path("proton-release-plan.json"))
     parser.add_argument("--directory", type=Path, default=Path("build/proton-ntcontext/dist"))
