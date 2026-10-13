@@ -3,8 +3,10 @@ package com.droiddeck.launcher.session
 import android.app.Application
 import android.content.Context
 import android.content.Intent
+import android.content.ComponentName
 import android.content.pm.ActivityInfo
 import android.content.pm.ResolveInfo
+import android.provider.Settings
 import androidx.test.core.app.ApplicationProvider
 import androidx.core.content.FileProvider
 import org.junit.Assert.*
@@ -32,6 +34,43 @@ class QuickShareLogsTest {
     fun resetProviderPaths() {
         val field = FileProvider::class.java.getDeclaredField("sCache").apply { isAccessible = true }
         (field.get(null) as MutableMap<*, *>).clear()
+        Settings.Secure.putString(context.contentResolver, "nearby_sharing_component", null)
+    }
+
+    private fun explicitReceiver(name: String, exported: Boolean = true, enabled: Boolean = true) {
+        shadowOf(context.packageManager).addOrUpdateActivity(ActivityInfo().apply {
+            this.name = name
+            packageName = "com.google.android.gms"
+            this.exported = exported
+            this.enabled = enabled
+        })
+    }
+
+    @Test fun sharesheetReceiverWithoutSendIntentFilterIsUsedDirectly() {
+        val name = "com.google.android.gms.nearby.sharing.ShareSheetActivity"
+        explicitReceiver(name)
+        assertTrue(context.packageManager.queryIntentActivities(
+            Intent(Intent.ACTION_SEND).setType("application/zip").setPackage("com.google.android.gms"), 0).isEmpty())
+        assertEquals(name, QuickShareLogs.intent(context, zip)!!.component!!.className)
+    }
+
+    @Test fun deviceConfiguredReceiverAliasIsPreferred() {
+        val name = "com.google.android.gms.quickshare.DeviceShareAlias"
+        explicitReceiver(name)
+        explicitReceiver("com.google.android.gms.nearby.sharing.ShareSheetActivity")
+        Settings.Secure.putString(context.contentResolver, "nearby_sharing_component",
+            ComponentName("com.google.android.gms", name).flattenToString())
+        assertEquals(name, QuickShareLogs.intent(context, zip)!!.component!!.className)
+    }
+
+    @Test fun disabledExplicitReceiverIsUnavailable() {
+        explicitReceiver("com.google.android.gms.nearby.sharing.ShareSheetActivity", enabled = false)
+        assertNull(QuickShareLogs.intent(context, zip))
+    }
+
+    @Test fun privateExplicitReceiverIsUnavailable() {
+        explicitReceiver("com.google.android.gms.nearby.sharing.ShareSheetActivity", exported = false)
+        assertNull(QuickShareLogs.intent(context, zip))
     }
 
     private fun receiver(name: String, packageName: String = "com.google.android.gms", exported: Boolean = true) {

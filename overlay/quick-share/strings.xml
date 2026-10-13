@@ -1,4 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="quick_share_unavailable">Quick Share could not be opened. Check that Google Play services and Quick Share are available.</string>
+    <string name="quick_share_unavailable">DroidDeck could not find the Quick Share receiver. This does not mean Quick Share is disabled.</string>
+    <string name="quick_share_launch_failed">Quick Share could not be opened (%1$s). The error was recorded in the log.</string>
 </resources>

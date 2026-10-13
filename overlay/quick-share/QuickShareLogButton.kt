@@ -1,6 +1,7 @@
 package com.droiddeck.launcher.ui
 
 import android.widget.Toast
+import android.util.Log
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -25,12 +26,16 @@ fun QuickShareLogButton(
             if (zip == null) {
                 PatchToast.makeText(context, R.string.session_logs_archive_failed, Toast.LENGTH_LONG).show()
             } else {
-                val launched = runCatching {
-                    val intent = QuickShareLogs.intent(context, zip) ?: return@runCatching false
-                    context.startActivity(intent)
-                    true
-                }.getOrDefault(false)
-                if (!launched) PatchToast.makeText(context, R.string.quick_share_unavailable, Toast.LENGTH_LONG).show()
+                runCatching {
+                    val intent = QuickShareLogs.intent(context, zip)
+                    if (intent == null) {
+                        PatchToast.makeText(context, R.string.quick_share_unavailable, Toast.LENGTH_LONG).show()
+                    } else context.startActivity(intent)
+                }.onFailure {
+                    Log.w("QuickShareLogs", "Could not launch Quick Share", it)
+                    PatchToast.makeText(context, context.getString(R.string.quick_share_launch_failed,
+                        it.javaClass.simpleName), Toast.LENGTH_LONG).show()
+                }
             }
         }
     }
