@@ -8,12 +8,8 @@ on:
       - 'overlay/japanese-fonts/**'
       - 'overlay/offline-mode/**'
       - 'overlay/proton-logs/**'
-      - 'overlay/steam-diagnostics/**'
       - 'overlay/proton-import/**'
-      - 'overlay/build-cache/**'
       - 'overlay/low-memory/**'
-      - 'overlay/suspend-survival/**'
-      - 'overlay/readable-toasts/**'
       - 'overlay/log-share/**'
       - 'overlay/quick-share/**'
       - 'overlay/ci-stability/**'
@@ -94,6 +90,16 @@ jobs:
           restore-keys: |
             apk-downloads-${{ runner.os }}-${{ steps.plan.outputs.base }}-
             apk-downloads-${{ runner.os }}-
+      - name: Cache verified PRoot build outputs
+        uses: actions/cache@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
+        if: steps.plan.outputs.build == 'true'
+        with:
+          path: |
+            source/build/DroidDeck/app/src/main/jniLibs/arm64-v8a/libproot.so
+            source/build/DroidDeck/app/src/main/jniLibs/arm64-v8a/libproot-loader.so
+            source/build/DroidDeck/app/src/main/jniLibs/arm64-v8a/.proot-inputs
+            source/build/DroidDeck/app/src/main/jniLibs/arm64-v8a/.proot-outputs
+          key: apk-proot-v1-${{ runner.os }}-${{ runner.arch }}-${{ env.DROIDDECK_NDK_VERSION }}-${{ hashFiles('source/build/DroidDeck/tools/proot/**') }}
       - name: Android build dependencies
         if: steps.plan.outputs.build == 'true'
         run: |

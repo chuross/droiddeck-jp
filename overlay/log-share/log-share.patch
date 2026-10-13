@@ -253,14 +253,11 @@
 +    private fun recoverAbandoned(context: Context) {
          val parent = LinuxRuntime.logDir(context)
          val abandoned = parent.listFiles { f ->
-@@ -277,14 +123,13 @@
+@@ -277,13 +123,11 @@
                          "session died of a crash, the entry is in there unless the device rebooted.\n"
                  )
 -                val record = Record(dir)
--                SuspendSurvival.recoverExit(context, dir)
 -                if (newest) copySteamLogs(context, dir, record)
-+                runCatching { SuspendSurvival.recoverExit(context, dir) }
-+                    .onFailure { runCatching { Log.w(TAG, "exit diagnostics failed", it) } }
 +                if (newest) copySteamLogs(context, dir)
                  SessionLogCapture.dumpCrashBuffer(File(dir, "crash.log"))
                  SessionEvents.record("session.artifacts_recovered", mapOf("newest" to newest), dir)

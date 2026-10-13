@@ -26,14 +26,8 @@ class LogShareIntegrationTest(unittest.TestCase):
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(subprocess.check_output(["git", "-C", str(upstream), "show", "HEAD:" + path]))
 
-    def install_recovery_hook(self):
-        target = self.source / "app/src/main/java/com/droiddeck/launcher/session/SessionArtifacts.kt"
-        target.write_text(target.read_text().replace("                val record = Record(dir)\n",
-                          "                val record = Record(dir)\n                SuspendSurvival.recoverExit(context, dir)\n"))
-
-    def test_preflight_and_application_after_suspend_overlay(self):
+    def test_preflight_and_application_on_upstream(self):
         APPLY.check(self.source)
-        self.install_recovery_hook()
         APPLY.apply(self.source)
         for name, path in APPLY.FILES.items():
             self.assertEqual((self.source / path).read_bytes(), (OVERLAY / name).read_bytes())

@@ -57,57 +57,19 @@ class LogShareLifecycleTest {
         }
     }
 
-    @Test @Config(sdk = [30]) fun failedDiagnosticAndFailedFileDoNotPreventSharingRemainingLogs() {
+    @Test fun failedFileDoesNotPreventSharingRemainingLogsOrChangeLifecycle() {
         val context = RuntimeEnvironment.getApplication()
         val folder = tmp.newFolder("2026-10-12-02-steam")
-        File(folder, "session-process.json").writeText("invalid json")
-        // Both fallback report publication and normal publication fail.
-        File(folder, "process-exit.json").mkdir()
-        File(folder, "process-exit.json/blocked").writeText("keep")
         File(folder, "events.jsonl").writeText("{\"event\":\"initial\"}\n")
         File(folder, "oversized.log").bufferedWriter().use { out -> repeat(128) { out.write("x".repeat(1024)) } }
         SessionState.running = true
         val phase = SessionState.phase
         try {
-            SuspendSurvival.recoverExit(context, folder)
             assertTrue(SessionState.running)
             assertEquals(phase, SessionState.phase)
             val zip = SessionLogShare.zipFolder(context, folder)!!
             ZipFile(zip).use { archive ->
                 assertNull(archive.getEntry("${folder.name}/oversized.log"))
-                assertTrue(archive.getEntry("${folder.name}/events.jsonl").size > 0)
-            }
-        } finally { SessionState.running = false }
-    }
-
-    @Test @Config(sdk = [30]) fun historicalExitApiFailureDoesNotChangeLifecycleOrPreventShare() {
-        val context = RuntimeEnvironment.getApplication()
-        val folder = tmp.newFolder("2026-10-12-04-steam")
-        SuspendSurvival.remember(context, folder)
-        val identity = File(folder, "session-process.json")
-        identity.writeText(org.json.JSONObject(identity.readText())
-            .put("processInstance", "previous_process").toString())
-        val calls = java.util.concurrent.atomic.AtomicInteger()
-        val broken = object : android.content.ContextWrapper(context) {
-            override fun getSystemService(name: String): Any? {
-                if (name == android.content.Context.ACTIVITY_SERVICE) {
-                    calls.incrementAndGet()
-                    throw SecurityException("exit history unavailable")
-                }
-                return super.getSystemService(name)
-            }
-        }
-        SessionState.running = true
-        val phase = SessionState.phase
-        try {
-            SuspendSurvival.recoverExit(broken, folder)
-            assertEquals(1, calls.get())
-            assertEquals("diagnostic_failed", org.json.JSONObject(File(folder, "process-exit.json").readText())
-                .getString("outcome"))
-            assertTrue(SessionState.running)
-            assertEquals(phase, SessionState.phase)
-            File(folder, "events.jsonl").writeText("{\"event\":\"initial\"}\n")
-            ZipFile(SessionLogShare.zipFolder(context, folder)!!).use { archive ->
                 assertTrue(archive.getEntry("${folder.name}/events.jsonl").size > 0)
             }
         } finally { SessionState.running = false }

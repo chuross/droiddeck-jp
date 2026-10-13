@@ -112,7 +112,7 @@ diff --git a/app/src/main/java/com/droiddeck/launcher/ProtonMenu.kt b/app/src/ma
 +                protonPercent = -1
 +                refreshProtons()
 +                onInstalledChanged()
-+                com.droiddeck.launcher.ui.PatchToast.makeText(activity, problem ?: activity.getString(R.string.proton_import_done), android.widget.Toast.LENGTH_LONG).show()
++                android.widget.Toast.makeText(activity, problem ?: activity.getString(R.string.proton_import_done), android.widget.Toast.LENGTH_LONG).show()
 +            }
 +        }, "import-proton").start()
 +    }
@@ -149,7 +149,7 @@ diff --git a/app/src/main/java/com/droiddeck/launcher/ProtonMenu.kt b/app/src/ma
 +                protonPercent = -1
 +                refreshProtons()
 +                onInstalledChanged()
-+                if (problem != null) com.droiddeck.launcher.ui.PatchToast.makeText(activity, problem, android.widget.Toast.LENGTH_LONG).show()
++                if (problem != null) android.widget.Toast.makeText(activity, problem, android.widget.Toast.LENGTH_LONG).show()
 +            }
 +        }, "remove-imported-proton").start()
      }

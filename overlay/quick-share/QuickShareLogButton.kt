@@ -24,16 +24,16 @@ fun QuickShareLogButton(
             else SessionLogShare.latest(context)
         }) { zip ->
             if (zip == null) {
-                PatchToast.makeText(context, R.string.session_logs_archive_failed, Toast.LENGTH_LONG).show()
+                Toast.makeText(context, R.string.session_logs_archive_failed, Toast.LENGTH_LONG).show()
             } else {
                 runCatching {
                     val intent = QuickShareLogs.intent(context, zip)
                     if (intent == null) {
-                        PatchToast.makeText(context, R.string.quick_share_unavailable, Toast.LENGTH_LONG).show()
+                        Toast.makeText(context, R.string.quick_share_unavailable, Toast.LENGTH_LONG).show()
                     } else context.startActivity(intent)
                 }.onFailure {
                     Log.w("QuickShareLogs", "Could not launch Quick Share", it)
-                    PatchToast.makeText(context, context.getString(R.string.quick_share_launch_failed,
+                    Toast.makeText(context, context.getString(R.string.quick_share_launch_failed,
                         it.javaClass.simpleName), Toast.LENGTH_LONG).show()
                 }
             }

@@ -158,17 +158,10 @@ class PrepareTest(unittest.TestCase):
         staging.parent.mkdir(parents=True)
         staging.write_text('        val files = arrayOf(\n        )\n')
         (self.source / "app/build.gradle").write_text('applicationId "com.droiddeck.launcher"\n')
-        proot = self.source / "tools/proot/build.sh"
-        proot.parent.mkdir(parents=True)
-        proot.write_text(builder.PATCHES["build-cache"].BEFORE)
         with patch.object(fonts, "bundle_fonts"), \
              patch.object(imports, "check"), patch.object(imports, "apply"), \
              patch.object(builder.PATCHES["low-memory"], "check"), \
              patch.object(builder.PATCHES["low-memory"], "apply"), \
-             patch.object(builder.PATCHES["suspend-survival"], "check"), \
-             patch.object(builder.PATCHES["suspend-survival"], "apply"), \
-             patch.object(builder.PATCHES["readable-toasts"], "check"), \
-             patch.object(builder.PATCHES["readable-toasts"], "apply"), \
              patch.object(builder.PATCHES["log-share"], "check"), \
              patch.object(builder.PATCHES["log-share"], "apply"), \
              patch.object(builder.PATCHES["quick-share"], "check"), \
@@ -195,15 +188,6 @@ class PrepareTest(unittest.TestCase):
             logs.patch_proton_logs(self.source)
         self.assertEqual(script.read_text(), text)
 
-    def test_changed_diagnostics_launch_hook_stops_before_installing_assets(self):
-        script = self.source / "tools/linuxfs/overlay/usr/local/bin/droiddeck-game-env"
-        script.parent.mkdir(parents=True)
-        script.write_text("def main():\n    upstream_launch_changed()\n")
-        with patch.object(fonts, "bundle_fonts") as bundled:
-            with self.assertRaisesRegex(RuntimeError, "Steam diagnostics launch hook changed"):
-                builder.overlay(self.source)
-        bundled.assert_not_called()
-        self.assertFalse((script.parent / "droiddeck-patch-fonts").exists())
 
 
 if __name__ == "__main__":
