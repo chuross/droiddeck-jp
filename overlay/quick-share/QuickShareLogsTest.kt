@@ -1,23 +1,37 @@
 package com.droiddeck.launcher.session
 
+import android.app.Application
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ActivityInfo
 import android.content.pm.ResolveInfo
 import androidx.test.core.app.ApplicationProvider
+import androidx.core.content.FileProvider
 import org.junit.Assert.*
+import org.junit.After
+import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.Shadows.shadowOf
+import org.robolectric.annotation.Config
 import java.io.File
 
 @RunWith(RobolectricTestRunner::class)
+@Config(sdk = [28], application = Application::class)
 class QuickShareLogsTest {
     private val context = ApplicationProvider.getApplicationContext<Context>()
     private val zip get() = File(context.cacheDir, "share/test.zip").apply {
         parentFile!!.mkdirs()
         writeText("test")
+    }
+
+    // AndroidX keeps this process-wide cache while Robolectric gives each test a new cacheDir.
+    // Preserve the real manifest/provider checks, but never reuse another test's root.
+    @Before @After
+    fun resetProviderPaths() {
+        val field = FileProvider::class.java.getDeclaredField("sCache").apply { isAccessible = true }
+        (field.get(null) as MutableMap<*, *>).clear()
     }
 
     private fun receiver(name: String, packageName: String = "com.google.android.gms", exported: Boolean = true) {
