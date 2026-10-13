@@ -52,7 +52,7 @@ def resolve_source(tag):
     endpoint = "repos/" + REPOSITORY
     tree = api(endpoint + "/git/trees/" + commit)
     commits = {}
-    for name in ("wine", "dxvk"):
+    for name in ("wine", "dxvk", "vkd3d-proton"):
         entries = [entry for entry in tree["tree"] if entry["path"] == name
                    and entry["mode"] == "160000" and entry["type"] == "commit"
                    and SHA.fullmatch(entry["sha"])]
@@ -63,7 +63,7 @@ def resolve_source(tag):
     sdk = arm64_sdk(base64.b64decode(makefile["content"]).decode())
     if info.get("proton_wine_commit") != commits["wine"] or info.get("sdk_image") != sdk:
         raise RuntimeError("DroidDeck-Proton build provenance differs from source")
-    return commit, commits["wine"], commits["dxvk"], sdk
+    return commit, commits["wine"], commits["dxvk"], commits["vkd3d-proton"], sdk
 
 
 def arm64_sdk(makefile):
@@ -93,12 +93,12 @@ def candidate_lock(lock, upstream=None, resolve=resolve_source):
     digest = asset.get("digest") or ""
     if asset["browser_download_url"] != url or not re.fullmatch(r"sha256:[0-9a-f]{64}", digest):
         raise RuntimeError("Published ARM64 archive URL or SHA256 is unavailable")
-    proton, wine, dxvk, sdk = resolve(tag)
-    if not all(SHA.fullmatch(value) for value in (proton, wine, dxvk)):
+    proton, wine, dxvk, vkd3d, sdk = resolve(tag)
+    if not all(SHA.fullmatch(value) for value in (proton, wine, dxvk, vkd3d)):
         raise RuntimeError("Invalid DroidDeck-Proton source commit")
     return dict(proton_repository="https://github.com/" + REPOSITORY + ".git",
                 proton_branch=tag, source_tag=tag,
-                proton_commit=proton, wine_commit=wine, dxvk_commit=dxvk,
+                proton_commit=proton, wine_commit=wine, dxvk_commit=dxvk, vkd3d_commit=vkd3d,
                 base_name=name, base_directory="DroidDeck-Proton " + tag.removeprefix("DroidDeck-Proton-"),
                 build_name=name + "-droiddeck",
                 sdk_image=sdk, base_sha256=digest[7:], base_archive=url)
@@ -119,7 +119,9 @@ def source_identity(lock):
     files = sorted(path for path in ROOT.iterdir()
                    if path.is_file() and path.name != "build.lock.json")
     files += [ROOT.parents[1] / ".github/workflows/proton.yml",
-              ROOT.parents[1] / "tests/test_proton_ntcontext.py"]
+              ROOT.parents[1] / "tests/test_proton_ntcontext.py",
+              ROOT.parents[1] / "tests/test_vkd3d_low_memory.py"]
+    files += sorted(path for path in (ROOT.parent / "vkd3d-low-memory").iterdir() if path.is_file())
     for path in files:
         digest.update(path.name.encode() + b"\0" + path.read_bytes())
     return "<!-- proton-source: " + digest.hexdigest() + " -->"

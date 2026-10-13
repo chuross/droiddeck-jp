@@ -11,6 +11,7 @@ import subprocess
 import tarfile
 
 ROOT = Path(__file__).resolve().parent
+VKD3D_ROOT = ROOT.parent / "vkd3d-low-memory"
 
 
 def sha256(path):
@@ -134,6 +135,27 @@ def rebuilt_dxvk(results):
     return rebuilt
 
 
+def vkd3d_interface(path):
+    interface = pe_interface(path)
+    if interface["machine"] != 0xaa64 or not interface["arm64x_metadata"]:
+        raise ValueError("VKD3D architecture mismatch: expected AA64 ARM64X")
+    if "D3D12GetInterface" not in interface["exports"]:
+        raise ValueError("VKD3D D3D12 core export is missing")
+    return interface
+
+
+def original_vkd3d(tree):
+    candidates = {path.resolve() for path in tree.glob("files/lib*/wine/vkd3d-proton/aarch64-windows/d3d12core.dll")
+                  if path.is_file()}
+    if len(candidates) != 1:
+        raise ValueError("expected exactly one ARM64X VKD3D core in Proton build")
+    original = candidates.pop()
+    if not original.is_relative_to(tree.resolve()):
+        raise ValueError("VKD3D target is outside Proton tree")
+    vkd3d_interface(original)
+    return original
+
+
 def write_preserving_mode(path, data):
     mode = path.stat().st_mode & 0o7777
     path.chmod(mode | 0o200)
@@ -164,18 +186,22 @@ def package(task, manager, lock_path=None):
     if lock["proton_repository"] != "https://github.com/Droid-Deck/DroidDeck-Proton.git":
         raise ValueError("expected DroidDeck-Proton source")
     for name, expected in (("", lock["proton_commit"]), ("wine", lock["wine_commit"]),
-                           ("dxvk", lock["dxvk_commit"])):
+                           ("dxvk", lock["dxvk_commit"]), ("vkd3d-proton", lock["vkd3d_commit"])):
         actual = subprocess.check_output(
             ["git", "-C", str(task / "proton" / name), "rev-parse", "HEAD"], text=True).strip()
         if actual != expected:
             raise ValueError("source commit differs from lock")
     check_disassembly((task / "results/signal-arm64ec-disassembly.txt").read_text())
-    for name, patch in (("wine", "ntgetcontext-null.patch"), ("dxvk", "dxvk-memory-budget.patch")):
+    for name, patch in (("wine", ROOT / "ntgetcontext-null.patch"), ("dxvk", ROOT / "dxvk-memory-budget.patch"),
+                        ("vkd3d-proton", VKD3D_ROOT / "vkd3d-low-memory.patch")):
         evidence = (task / ("results/" + name + "-patches.diff")).read_text()
         if not evidence.strip():
             raise ValueError("patch evidence is missing")
         subprocess.run(["git", "-C", str(task / "proton" / name), "apply", "--reverse",
-                        "--check", str(ROOT / patch)], check=True)
+                        "--check", str(patch)], check=True)
+    header = task / "proton/vkd3d-proton/libs/vkd3d/droiddeck_memory.h"
+    if header.read_bytes() != (VKD3D_ROOT / "droiddeck_memory.h").read_bytes():
+        raise ValueError("VKD3D low-memory policy differs from checked source")
     archive = task / "base.tar.gz"
     if sha256(archive) != lock["base_sha256"]:
         raise ValueError("base archive checksum mismatch")
@@ -197,12 +223,20 @@ def package(task, manager, lock_path=None):
     rebuilt_graphics = rebuilt_dxvk(task / "results")
     if dxvk_interface(dxvk) != dxvk_interface(rebuilt_graphics):
         raise ValueError("rebuilt DXGI interface differs from stock")
-    original_ntdll_hash, original_dxvk_hash = sha256(ntdll), sha256(dxvk)
-    if original_ntdll_hash == sha256(rebuilt) or original_dxvk_hash == sha256(rebuilt_graphics):
+    vkd3d = original_vkd3d(tree)
+    rebuilt_d3d12 = task / "results/vkd3d/d3d12core.dll"
+    if vkd3d_interface(vkd3d) != vkd3d_interface(rebuilt_d3d12):
+        raise ValueError("rebuilt VKD3D interface differs from stock")
+    if b"DROIDDECK_VKD3D_LOW_MEMORY" not in rebuilt_d3d12.read_bytes():
+        raise ValueError("rebuilt VKD3D low-memory switch is missing")
+    original_ntdll_hash, original_dxvk_hash, original_vkd3d_hash = sha256(ntdll), sha256(dxvk), sha256(vkd3d)
+    if (original_ntdll_hash == sha256(rebuilt) or original_dxvk_hash == sha256(rebuilt_graphics)
+            or original_vkd3d_hash == sha256(rebuilt_d3d12)):
         raise ValueError("rebuilt DLL is unchanged")
-    # Both interfaces are validated before replacing either stock DLL.
+    # All three interfaces are validated before replacing any stock DLL.
     write_preserving_mode(ntdll, rebuilt.read_bytes())
     write_preserving_mode(dxvk, rebuilt_graphics.read_bytes())
+    write_preserving_mode(vkd3d, rebuilt_d3d12.read_bytes())
     template = (task / "proton/compatibilitytool.vdf.template").read_text()
     if "##BUILD_NAME##" not in template or "##INTERNAL_TOOL_NAME##" not in template:
         raise ValueError("upstream compatibility template changed")
@@ -211,13 +245,17 @@ def package(task, manager, lock_path=None):
     if not sdk_digests:
         raise ValueError("SDK image digest is missing")
     metadata = dict(lock, manager_commit=manager, sdk_digests=sdk_digests,
-                    features=["ntcontext-null-fix", "dxvk-dxgi-memory-budget-cap"],
-                    patches=["ntgetcontext-null.patch", "dxvk-memory-budget.patch"],
+                    features=["ntcontext-null-fix", "dxvk-dxgi-memory-budget-cap", "vkd3d-low-memory-pools"],
+                    patches=["ntgetcontext-null.patch", "dxvk-memory-budget.patch", "vkd3d-low-memory.patch"],
                     original_ntdll_sha256=original_ntdll_hash, original_dxvk_dxgi_sha256=original_dxvk_hash,
                     rebuilt_ntdll_sha256=sha256(ntdll),
                     rebuilt_dxvk_dxgi_sha256=sha256(dxvk),
                     dxvk_dxgi_architecture="ARM64X",
                     dxvk_dxgi_archive_path=str(dxvk.relative_to(tree)),
+                    original_vkd3d_core_sha256=original_vkd3d_hash,
+                    rebuilt_vkd3d_core_sha256=sha256(vkd3d),
+                    vkd3d_core_architecture="ARM64X",
+                    vkd3d_core_archive_path=str(vkd3d.relative_to(tree)),
                     fix="ARM64EC NtGetContextThread(NULL) returns STATUS_INVALID_PARAMETER")
     (tree / "droiddeck-ntcontext-build.json").write_text(json.dumps(metadata, indent=2) + "\n")
     dist = task / "dist"
@@ -230,6 +268,7 @@ def package(task, manager, lock_path=None):
     for name in ("build.lock.json", "apply.py", "build.sh", "build-inside.sh", "build-dxvk.sh", "dxvk-arm64ec.cross", "package.py",
                  "ntgetcontext-null.patch", "dxvk-memory-budget.patch"):
         shutil.copy2(lock_path if name == "build.lock.json" and lock_path else ROOT / name, source_info / name)
+    shutil.copytree(VKD3D_ROOT, source_info / "vkd3d-low-memory", ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
     shutil.copy2(task / "proton/LICENSE.proton", tree / "LICENSE.proton")
     shutil.copy2(dist / (lock["build_name"] + "-wine-source.tar.xz"), source_info / "source.tar.xz")
     packaged = staging / lock["build_name"]

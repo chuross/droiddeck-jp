@@ -373,7 +373,8 @@ class DroidDeckPackageTest(unittest.TestCase):
             (binaries / name).write_bytes(header)
             (binaries / name).chmod(0o755)
         for directory, name, export in (("aarch64-windows", "ntdll.dll", "NtGetContextThread"),
-                                         ("dxvk/aarch64-windows", "dxgi.dll", "CreateDXGIFactory")):
+                                         ("dxvk/aarch64-windows", "dxgi.dll", "CreateDXGIFactory"),
+                                         ("vkd3d-proton/aarch64-windows", "d3d12core.dll", "D3D12GetInterface")):
             dll = self.tree / "files/lib/wine" / directory / name
             dll.parent.mkdir(parents=True)
             dll.write_bytes(synthetic_pe(export=export))
@@ -381,10 +382,13 @@ class DroidDeckPackageTest(unittest.TestCase):
         results.mkdir()
         (results / "signal-arm64ec-disassembly.txt").write_text(
             "0000000000000000 <#NtGetContextThread>:\n  0: cbz x1, 0x90\n  4: ldr w8, [x1, #0x30]\n")
-        for name in ("wine", "dxvk"):
+        for name in ("wine", "dxvk", "vkd3d-proton"):
             (results / (name + "-patches.diff")).write_text("patch")
         (self.task / "sdk-digests.json").write_text('["sdk@sha256:digest"]')
         (self.task / "proton").mkdir()
+        header = self.task / "proton/vkd3d-proton/libs/vkd3d/droiddeck_memory.h"
+        header.parent.mkdir(parents=True)
+        header.write_bytes((ROOT.parent / "vkd3d-low-memory/droiddeck_memory.h").read_bytes())
         (self.task / "proton/LICENSE.proton").write_text("Valve license")
         (self.task / "dist").mkdir()
         (self.task / "dist" / (self.lock["build_name"] + "-wine-source.tar.xz")).write_bytes(b"source")
@@ -394,10 +398,13 @@ class DroidDeckPackageTest(unittest.TestCase):
         (results / "ntdll.dll").write_bytes(synthetic_pe(export="NtGetContextThread", marker=b"patched"))
         (results / "dxvk").mkdir()
         (results / "dxvk/dxgi.dll").write_bytes(synthetic_pe(marker=b"patched"))
+        (results / "vkd3d").mkdir()
+        (results / "vkd3d/d3d12core.dll").write_bytes(synthetic_pe(export="D3D12GetInterface",
+                                                    marker=b"patched DROIDDECK_VKD3D_LOW_MEMORY"))
         subprocess.run(["tar", "-czf", str(self.task / "base.tar.gz"), "-C", str(self.task / "base"), self.lock["base_directory"]], check=True)
         self.lock["base_sha256"] = package.sha256(self.task / "base.tar.gz")
         self.lock_path.write_text(json.dumps(self.lock))
-        self.heads = [self.lock[key] + "\n" for key in ("proton_commit", "wine_commit", "dxvk_commit")]
+        self.heads = [self.lock[key] + "\n" for key in ("proton_commit", "wine_commit", "dxvk_commit", "vkd3d_commit")]
 
     def invoke(self):
         actual_run = subprocess.run
@@ -420,6 +427,10 @@ class DroidDeckPackageTest(unittest.TestCase):
         metadata = json.loads((packaged / "droiddeck-ntcontext-build.json").read_text())
         self.assertEqual(metadata["proton_commit"], self.lock["proton_commit"])
         self.assertEqual(metadata["dxvk_dxgi_architecture"], "ARM64X")
+        self.assertEqual(metadata["vkd3d_core_architecture"], "ARM64X")
+        self.assertIn("vkd3d-low-memory-pools", metadata["features"])
+        self.assertNotEqual(metadata["original_vkd3d_core_sha256"], metadata["rebuilt_vkd3d_core_sha256"])
+        self.assertTrue((packaged / "droiddeck-source/vkd3d-low-memory/droiddeck_memory.h").is_file())
         self.assertTrue((packaged / "droiddeck-source/source.tar.xz").is_file())
         self.assertEqual((packaged / "LICENSE.proton").read_text(), "Valve license")
         self.assertTrue((self.task / "dist" / release.asset_names(self.lock)[0]).is_file())
@@ -463,11 +474,34 @@ class DroidDeckPackageTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "evidence"):
             self.invoke()
 
+    def test_vkd3d_abi_and_missing_low_memory_switch_prevent_any_dll_replacement(self):
+        for binary, error in ((synthetic_pe(export="D3D12GetInterface", machine=0x8664), "architecture"),
+                              (synthetic_pe(export="Wrong"), "core export"),
+                              (synthetic_pe(export="D3D12GetInterface", marker=b"unpatched"), "switch")):
+            with self.subTest(error=error):
+                unpacked = self.task / "unpacked"
+                if unpacked.exists():
+                    shutil.rmtree(unpacked)
+                (self.task / "results/vkd3d/d3d12core.dll").write_bytes(binary)
+                with self.assertRaisesRegex(ValueError, error):
+                    self.invoke()
+                stock = unpacked / self.lock["base_directory"]
+                self.assertEqual(package.original_ntdll(stock).read_bytes(), package.original_ntdll(self.tree).read_bytes())
+
+    def test_vkd3d_source_and_policy_mismatch_prevent_packaging(self):
+        self.heads[-1] = "0" * 40
+        with self.assertRaisesRegex(ValueError, "source commit"):
+            self.invoke()
+        self.heads[-1] = self.lock["vkd3d_commit"] + "\n"
+        (self.task / "proton/vkd3d-proton/libs/vkd3d/droiddeck_memory.h").write_text("wrong policy")
+        with self.assertRaisesRegex(ValueError, "policy"):
+            self.invoke()
+
 
 class DroidDeckReleaseTest(unittest.TestCase):
     def setUp(self):
         self.lock = json.loads((ROOT / "build.lock.json").read_text())
-        self.resolve = Mock(return_value=("a" * 40, "b" * 40, "d" * 40, self.lock["sdk_image"]))
+        self.resolve = Mock(return_value=("a" * 40, "b" * 40, "d" * 40, "f" * 40, self.lock["sdk_image"]))
         self.upstream = {"tag_name": "DroidDeck-Proton-11-7.5", "published_at": "2026-10-01",
                          "assets": [{"name": "DroidDeck-Proton-11-7.5-aarch64.tar.gz",
                                      "digest": "sha256:" + "c" * 64,
@@ -490,6 +524,7 @@ class DroidDeckReleaseTest(unittest.TestCase):
         self.assertEqual(plan["lock"]["proton_commit"], "a" * 40)
         self.assertEqual(plan["lock"]["wine_commit"], "b" * 40)
         self.assertEqual(plan["lock"]["dxvk_commit"], "d" * 40)
+        self.assertEqual(plan["lock"]["vkd3d_commit"], "f" * 40)
         self.assertIn("Droid-Deck/DroidDeck-Proton", plan["lock"]["base_archive"])
         self.resolve.assert_called_once_with("DroidDeck-Proton-11-7.5")
         self.assertEqual(plan["lock"]["base_sha256"], "c" * 64)
@@ -521,7 +556,7 @@ class DroidDeckReleaseTest(unittest.TestCase):
         self.assertFalse(after["build"])
 
     def test_invalid_commit_rejected(self):
-        self.resolve.return_value = ("invalid", "b" * 40, "d" * 40, self.lock["sdk_image"])
+        self.resolve.return_value = ("invalid", "b" * 40, "d" * 40, "f" * 40, self.lock["sdk_image"])
         with self.assertRaisesRegex(RuntimeError, "commit"):
             self.plan()
 
@@ -534,14 +569,15 @@ class DroidDeckReleaseTest(unittest.TestCase):
     def test_resolve_branch_uses_wine_submodule_and_arm_sdk_at_exact_commit(self):
         makefile = ("else ifeq ($(TARGET_ARCH),arm64)\n"
                     "\tSTEAMRT_IMAGE ?= " + self.lock["sdk_image"] + "\nendif\n")
-        responses = [{"tree": [{"path": "wine", "mode": "160000", "type": "commit", "sha": "b" * 40}, {"path": "dxvk", "mode": "160000", "type": "commit", "sha": "d" * 40}]},
+        responses = [{"tree": [{"path": name, "mode": "160000", "type": "commit", "sha": sha * 40}
+                               for name, sha in (("wine", "b"), ("dxvk", "d"), ("vkd3d-proton", "f"))]},
                      {"content": base64.b64encode(makefile.encode()).decode()}]
         info = {"name": "DroidDeck-Proton-11-7.5-aarch64", "banner_proton_commit": "a" * 40,
                 "proton_wine_commit": "b" * 40, "sdk_image": self.lock["sdk_image"]}
         with patch.object(release, "build_info", return_value=info), \
                 patch.object(release, "api", side_effect=responses) as api:
             self.assertEqual(release.resolve_source("DroidDeck-Proton-11-7.5"),
-                             ("a" * 40, "b" * 40, "d" * 40, self.lock["sdk_image"]))
+                             ("a" * 40, "b" * 40, "d" * 40, "f" * 40, self.lock["sdk_image"]))
         self.assertTrue(api.call_args_list[-1].args[0].endswith("?ref=" + "a" * 40))
         with self.assertRaises(RuntimeError):
             release.arm64_sdk(makefile.replace("arm64)", "other)"))
@@ -552,7 +588,7 @@ class DroidDeckReleaseTest(unittest.TestCase):
         info = {"name": "DroidDeck-Proton-11-7.5-aarch64", "banner_proton_commit": "a" * 40,
                 "proton_wine_commit": "b" * 40, "sdk_image": self.lock["sdk_image"]}
         tree = {"tree": [{"path": name, "mode": "160000", "type": "commit", "sha": sha * 40}
-                         for name, sha in (("wine", "b"), ("dxvk", "d"))]}
+                         for name, sha in (("wine", "b"), ("dxvk", "d"), ("vkd3d-proton", "f"))]}
         makefile = "else ifeq ($(TARGET_ARCH),arm64)\n\tSTEAMRT_IMAGE ?= " + self.lock["sdk_image"] + "\nendif\n"
         for field, value in (("name", "other"), ("banner_proton_commit", "invalid"),
                              ("proton_wine_commit", "c" * 40), ("sdk_image", "other")):

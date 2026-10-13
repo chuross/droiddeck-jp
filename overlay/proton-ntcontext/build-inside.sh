@@ -17,3 +17,4 @@ llvm-objdump -dr dlls/ntdll/arm64ec-windows/signal_arm64ec.o > "$task_root/resul
 cp dlls/ntdll/arm64ec-windows/signal_arm64ec.o "$task_root/results/signal_arm64ec.o"
 llvm-readobj --file-headers --coff-exports --coff-load-config "$task_root/results/ntdll.dll" > "$task_root/results/ntdll-headers.txt"
 bash "$manager_root/overlay/proton-ntcontext/build-dxvk.sh" "$task_root" "$manager_root"
+bash "$manager_root/overlay/vkd3d-low-memory/build.sh" "$task_root" "$manager_root"

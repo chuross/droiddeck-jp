@@ -4,6 +4,7 @@
   "proton_commit": "7065c02ff0bf5373b2ea550aff568a8fff9c80e0",
   "wine_commit": "847635ca0ec7871fa9a3df80283c20dcdc09d572",
   "dxvk_commit": "2c94c5f25cf75c313ef2a55b2e0c9276d67c28d6",
+  "vkd3d_commit": "2230755878b01993b4b82d0ac0c0624f3ab4d333",
   "base_name": "DroidDeck-Proton-11-7.5",
   "build_name": "DroidDeck-Proton-11-7.5-droiddeck",
   "sdk_image": "registry.gitlab.steamos.cloud/proton/steamrt4/sdk/arm64-llvm:4.0.20260714.251823-0",

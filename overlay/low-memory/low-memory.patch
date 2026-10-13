@@ -2,10 +2,11 @@ diff --git a/app/src/main/java/com/droiddeck/launcher/core/GameEnvironmentOption
 index 078ae816..67495b6c 100644
 --- a/app/src/main/java/com/droiddeck/launcher/core/GameEnvironmentOptions.kt
 +++ b/app/src/main/java/com/droiddeck/launcher/core/GameEnvironmentOptions.kt
-@@ -7,6 +7,11 @@ object GameEnvironmentOptions {
+@@ -7,6 +7,12 @@ object GameEnvironmentOptions {
      data class Option(val name: String, val value: String, val detail: Int, val type: Type, val choices: List<String> = emptyList())
 
      val all = listOf(
++        Option("DROIDDECK_LOW_MEMORY_VKD3D", "1", R.string.jp_vkd3d_memory_hint, Type.TOGGLE, listOf("0", "1")),
 +        Option("DROIDDECK_LOW_MEMORY_STEAM_TRIM", "1", R.string.jp_steam_trim_hint, Type.TOGGLE, listOf("0", "1")),
 +        Option("DROIDDECK_LOW_MEMORY_SKIP_DECKY", "1", R.string.jp_skip_decky_hint, Type.TOGGLE, listOf("0", "1")),
 +        Option("DROIDDECK_LOW_MEMORY_ALLOCATOR", "1", R.string.jp_allocator_hint, Type.TOGGLE, listOf("0", "1")),
@@ -95,7 +96,7 @@ diff --git a/app/src/main/res/values-ja/strings.xml b/app/src/main/res/values-ja
 index a788642f..29435386 100644
 --- a/app/src/main/res/values-ja/strings.xml
 +++ b/app/src/main/res/values-ja/strings.xml
-@@ -2088,4 +2088,11 @@
+@@ -2088,4 +2088,12 @@
      <plurals name="games_already_n">
          <item quantity="other">%1$d 本はすでにゲームにあります</item>
      </plurals>
@@ -106,12 +107,13 @@ index a788642f..29435386 100644
 +    <string name="jp_allocator_hint">Low Memoryモード時、glibcをtop_pad=1MB・arena_max=2・trim_threshold=128KBに設定。共有設定は次回セッションからSteam・gamescope・Xwaylandに、ゲーム別設定は次回起動時に適用。0でallocatorの変更だけ無効にして比較できます。Low MemoryをOFFにして再起動すると従来の設定に戻ります。性能への影響は環境によります。</string>
 +    <string name="jp_steam_trim_hint">共有設定：Low Memory時にSteam Web UIの未使用メモリ回収を促します。ゲーム起動・表示中に実行し、メモリ不足時の再試行は120秒以上空けます。Steamとゲームは終了させません。0で停止して比較できます。回収量は環境によります。PSSの変化はセッションログに記録します。次回セッションから反映。</string>
 +    <string name="jp_skip_decky_hint">共有設定：Low Memory時はDecky loaderとプラグインを起動しません。導入済みファイルや有効設定は変更せず、Low MemoryをOFFにすると次回セッションで戻ります。0でLow Memory中もDeckyを使用できます。次回セッションから反映。</string>
++    <string name="jp_vkd3d_memory_hint">Low Memory時、対応するカスタムProtonでVKD3Dの未使用一時バッファ・描画コマンドの保持を削減し、60回のResetごとにドライバメモリの解放を要求します。ゲーム起動時に反映。0でこの変更だけ無効化して比較できます。再確保によるカクつきが増える場合があります。</string>
  </resources>
 diff --git a/app/src/main/res/values/strings.xml b/app/src/main/res/values/strings.xml
 index ce6d2a68..1e6d1092 100644
 --- a/app/src/main/res/values/strings.xml
 +++ b/app/src/main/res/values/strings.xml
-@@ -2287,4 +2287,11 @@
+@@ -2287,4 +2287,12 @@
      <string name="desktop_size">Size on disk</string>
      <string name="desktop_uninstall_title">Uninstall the desktop?</string>
      <string name="desktop_all_systems">All</string>
@@ -122,6 +124,7 @@ index ce6d2a68..1e6d1092 100644
 +    <string name="jp_allocator_hint">Low Memory Mode: use glibc top_pad=1MB, arena_max=2, trim_threshold=128KB. Shared profile applies to Steam, gamescope and Xwayland at next session; game profile applies at next launch. Set 0 to compare without allocator changes. Turning Low Memory Mode off restores the previous tunables on restart. Performance may vary.</string>
 +    <string name="jp_steam_trim_hint">Shared profile: request unused Steam Web UI memory reclamation in Low Memory Mode on game launch and during gameplay. Pressure retries are at least 120 seconds apart. Steam and games stay running. Set 0 to compare without reclamation. Savings vary; observed PSS changes are recorded in the session log. Applies next session.</string>
 +    <string name="jp_skip_decky_hint">Shared profile: skip the Decky loader and plugins in Low Memory Mode. Installed files and the saved enable setting are preserved; turning Low Memory Mode off restores Decky next session. Set 0 to keep Decky in Low Memory Mode. Applies next session.</string>
++    <string name="jp_vkd3d_memory_hint">Low Memory Mode: supported custom Proton retains fewer unused VKD3D scratch buffers and command buffers, and requests driver memory release every 60 pool resets. Applies at game launch. Set 0 to compare without this change. Reallocation may increase stutter.</string>
  </resources>
 diff --git a/app/src/test/java/com/droiddeck/launcher/session/GameEnvironmentStoreTest.kt b/app/src/test/java/com/droiddeck/launcher/session/GameEnvironmentStoreTest.kt
 index d499437e..5bc832ea 100644

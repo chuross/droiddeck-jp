@@ -5,6 +5,8 @@ on:
     branches: [main]
     paths:
       - 'overlay/proton-ntcontext/**'
+      - 'overlay/vkd3d-low-memory/**'
+      - '.github/workflows/proton.yml'
   workflow_dispatch:
   schedule:
     - cron: '47 0 * * *'
@@ -53,7 +55,7 @@ jobs:
           sudo apt-get install -y git make rsync curl patch autoconf automake libtool nasm meson ninja-build cmake
           docker info
           df -h "$GITHUB_WORKSPACE"
-      - name: Rebuild ntdll and DXGI and replace stock DLLs
+      - name: Rebuild ntdll, DXGI and VKD3D and replace stock DLLs
         if: steps.plan.outputs.build == 'true'
         run: bash overlay/proton-ntcontext/build.sh candidate-proton.lock.json
       - name: Attach Proton to current DroidDeck Release and record built DroidDeck-Proton commit
@@ -73,6 +75,7 @@ jobs:
             build/proton-ntcontext/results/
             build/proton-ntcontext/wine-build/config.log
             build/proton-ntcontext/dxvk-build/meson-logs/
+            build/proton-ntcontext/vkd3d-build/meson-logs/
             build/proton-ntcontext/sdk-digests.json
           if-no-files-found: ignore
       - name: Remove temporary build source

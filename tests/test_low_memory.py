@@ -21,6 +21,17 @@ spec.loader.exec_module(APPLY)
 
 
 class LowMemoryTest(unittest.TestCase):
+    def test_vkd3d_reclaim_follows_session_mode_and_game_opt_out(self):
+        for option, expected in ((None, "1"), ("1", "1"), ("0", "0")):
+            env = {LOW["SESSION"]: "1"}
+            if option is not None:
+                env[LOW["VKD3D"]] = option
+            self.assertEqual(LOW["game_environment"](env)["DROIDDECK_VKD3D_LOW_MEMORY"], expected)
+            self.assertNotIn("DROIDDECK_VKD3D_LOW_MEMORY", env)
+        off = {LOW["SESSION"]: "0", LOW["MODE"]: "1"}
+        self.assertIs(LOW["game_environment"](off), off)
+        self.assertNotIn("DROIDDECK_VKD3D_LOW_MEMORY", off)
+
     def test_default_and_explicit_disabled_are_unchanged(self):
         for value in (None, "0", "false"):
             env = {"DXVK_CONFIG": "existing", "LD_PRELOAD": "gameoverlayrenderer.so"}

@@ -1,0 +1,114 @@
+diff --git a/libs/vkd3d/command.c b/libs/vkd3d/command.c
+index 8a632d2..aed3849 100644
+--- a/libs/vkd3d/command.c
++++ b/libs/vkd3d/command.c
+@@ -20,6 +20,7 @@
+ #define VKD3D_DBG_CHANNEL VKD3D_DBG_CHANNEL_API
+
+ #include "vkd3d_private.h"
++#include "droiddeck_memory.h"
+ #include "vkd3d_d3dkmt.h"
+ #include "vkd3d_swapchain_factory.h"
+ #include "vkd3d_descriptor_debug.h"
+@@ -2521,7 +2522,8 @@ static HRESULT d3d12_command_allocator_reset_command_pool(
+         struct d3d12_command_allocator_command_pool *pool)
+ {
+     const struct vkd3d_vk_device_procs *vk_procs = &device->vk_procs;
+-    const size_t recycled_command_list_limit = 256;
++    const size_t recycled_command_list_limit = droiddeck_command_buffer_limit(device->droiddeck_low_memory);
++    VkCommandPoolResetFlags reset_flags = 0;
+     VkResult vr;
+
+     if (!pool->vk_command_pool)
+@@ -2548,8 +2550,11 @@ static HRESULT d3d12_command_allocator_reset_command_pool(
+         pool->recycled.command_buffer_count = recycled_command_list_limit;
+     }
+
+-    /* The intent here is to recycle memory, so do not use RELEASE_RESOURCES_BIT here. */
+-    if ((vr = VK_CALL(vkResetCommandPool(device->vk_device, pool->vk_command_pool, 0))))
++    /* Called only through the existing safe reset path, after the pending-use
++     * checks. Periodically let the driver release its reusable backing memory. */
++    if (droiddeck_release_pool_memory(device->droiddeck_low_memory, &pool->droiddeck_reset_count))
++        reset_flags = VK_COMMAND_POOL_RESET_RELEASE_RESOURCES_BIT;
++    if ((vr = VK_CALL(vkResetCommandPool(device->vk_device, pool->vk_command_pool, reset_flags))))
+     {
+         WARN("Resetting command pool failed, vr %d.\n", vr);
+         return hresult_from_vk_result(vr);
+@@ -2806,7 +2811,8 @@ static ULONG d3d12_command_allocator_dec_ref(struct d3d12_command_allocator *all
+              * For well-behaving apps, we'll just bloat memory. */
+             if (pthread_mutex_lock(&device->mutex) == 0)
+             {
+-                if (device->cached_command_allocator_count < ARRAY_SIZE(device->cached_command_allocators))
++                if (device->cached_command_allocator_count < droiddeck_command_pool_limit(device->droiddeck_low_memory,
++                        ARRAY_SIZE(device->cached_command_allocators)))
+                 {
+                     /* Recycle the pool. Some games spam free/allocate pools,
+                      * even if it completely goes against the point of the API. */
+diff --git a/libs/vkd3d/device.c b/libs/vkd3d/device.c
+index 817f8a8..e1cc35e 100644
+--- a/libs/vkd3d/device.c
++++ b/libs/vkd3d/device.c
+@@ -19,6 +19,7 @@
+ #define VKD3D_DBG_CHANNEL VKD3D_DBG_CHANNEL_API
+
+ #include "vkd3d_private.h"
++#include "droiddeck_memory.h"
+ #include "vkd3d_sonames.h"
+ #include "vkd3d_descriptor_debug.h"
+ #include "vkd3d_timestamp_profiler.h"
+@@ -3516,7 +3517,8 @@ void d3d12_device_return_scratch_buffer(struct d3d12_device *device, enum vkd3d_
+     {
+         pthread_mutex_unlock(&device->mutex);
+         d3d12_device_destroy_scratch_buffer(device, scratch);
+-        WARN("Too many scratch buffers in flight, cannot recycle kind %u.\n", kind);
++        if (!device->droiddeck_low_memory)
++            WARN("Too many scratch buffers in flight, cannot recycle kind %u.\n", kind);
+     }
+ }
+
+@@ -10471,6 +10473,10 @@ extern CONST_VTBL struct IAmdExtAntiLagApiVtbl d3d_amd_ext_anti_lag_vtbl;
+ static void vkd3d_scratch_pool_init(struct d3d12_device *device)
+ {
+     unsigned int i;
++    char low_memory[8] = {0};
++
++    device->droiddeck_low_memory = vkd3d_get_env_var("DROIDDECK_VKD3D_LOW_MEMORY", low_memory, sizeof(low_memory))
++            && droiddeck_memory_enabled(low_memory);
+
+     for (i = 0; i < VKD3D_SCRATCH_POOL_KIND_COUNT; i++)
+     {
+@@ -10499,6 +10505,14 @@ static void vkd3d_scratch_pool_init(struct d3d12_device *device)
+      * Tuned for Starfield which is the "worst case scenario" so far. */
+     device->scratch_pools[VKD3D_SCRATCH_POOL_KIND_INDIRECT_PREPROCESS].scratch_buffer_size =
+             VKD3D_SCRATCH_BUFFER_COUNT_INDIRECT_PREPROCESS;
++
++    /* Cache only returned buffers. Required/live allocation sizes are unchanged. */
++    for (i = 0; i < VKD3D_SCRATCH_POOL_KIND_COUNT; i++)
++        device->scratch_pools[i].scratch_buffer_size = droiddeck_scratch_limit(device->droiddeck_low_memory,
++                i == VKD3D_SCRATCH_POOL_KIND_INDIRECT_PREPROCESS, device->scratch_pools[i].scratch_buffer_size);
++
++    if (device->droiddeck_low_memory)
++        INFO("DroidDeck low memory: scratch cache 4/8 buffers, command pool cache 1, recycled handles 64, release every 60 resets.\n");
+ }
+
+ static HRESULT d3d12_device_create_sparse_init_timeline(struct d3d12_device *device)
+diff --git a/libs/vkd3d/vkd3d_private.h b/libs/vkd3d/vkd3d_private.h
+index 3e71f89..ce60147 100644
+--- a/libs/vkd3d/vkd3d_private.h
++++ b/libs/vkd3d/vkd3d_private.h
+@@ -2759,6 +2759,7 @@ struct d3d12_command_allocator_command_pool
+     uint32_t vk_family_index;
+     VkCommandPool vk_command_pool;
+     struct d3d12_command_allocator_command_pool_list recycled, pending;
++    uint32_t droiddeck_reset_count;
+ };
+
+ struct vkd3d_descriptor_heap_meta_allocation
+@@ -5871,6 +5872,7 @@ struct d3d12_device
+     uint64_t sparse_init_timeline_value;
+
+     struct d3d12_device_scratch_pool scratch_pools[VKD3D_SCRATCH_POOL_KIND_COUNT];
++    bool droiddeck_low_memory;
+
+     struct vkd3d_query_pool query_pools[VKD3D_VIRTUAL_QUERY_POOL_COUNT];
+     size_t query_pool_count;
