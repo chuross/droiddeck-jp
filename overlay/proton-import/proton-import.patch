@@ -1,8 +1,7 @@
 diff --git a/app/src/main/java/com/droiddeck/launcher/MainActivity.kt b/app/src/main/java/com/droiddeck/launcher/MainActivity.kt
-index 6d3cf99b..7ac1ee44 100644
 --- a/app/src/main/java/com/droiddeck/launcher/MainActivity.kt
 +++ b/app/src/main/java/com/droiddeck/launcher/MainActivity.kt
-@@ -39,6 +39,7 @@ import com.droiddeck.launcher.session.SessionService
+@@ -39,6 +39,7 @@
  import com.droiddeck.launcher.ui.PackageRow
  import com.droiddeck.launcher.ui.exposeTestTags
  import com.droiddeck.launcher.session.OfflineMode
@@ -10,7 +9,16 @@ index 6d3cf99b..7ac1ee44 100644
  import com.droiddeck.launcher.session.ProtonExtras
  import com.droiddeck.launcher.session.ComponentsManager
  import com.droiddeck.launcher.ui.ComponentsPage
-@@ -201,6 +202,9 @@ class MainActivity : ComponentActivity() {
+@@ -95,7 +96,7 @@
+     private val components = ComponentsMenu(this, ui)
+     private val decky = DeckyMenu(this, ui)
+     private val updates = UpdatesMenu(this, ui)
+-    private val protons = ProtonMenu(this, ui)
++    private val protons = ProtonMenu(this, ui) { components.refreshComponents() }
+ 
+     // The screen's state. Compose redraws whatever reads these when they change.
+     private var installed by mutableStateOf<String?>(null)
+@@ -201,6 +202,9 @@
  
      // The app's own picker (files/), once per kind of pick: the two driver lists validate
      // differently, and the reason a zip is refused names the list it belongs in.
@@ -20,7 +28,7 @@ index 6d3cf99b..7ac1ee44 100644
      private val pickComponent = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { r ->
          if (r.resultCode == RESULT_OK) InAppFilePicker.pickedUri(r.data)?.let { importComponent(it) }
      }
-@@ -391,7 +395,7 @@ class MainActivity : ComponentActivity() {
+@@ -391,7 +395,7 @@
                      android.widget.Toast.makeText(this, R.string.main_wait_runtime, android.widget.Toast.LENGTH_SHORT).show()
                      return
                  }
@@ -29,7 +37,7 @@ index 6d3cf99b..7ac1ee44 100644
                      android.widget.Toast.makeText(this, R.string.main_wait_proton_install, android.widget.Toast.LENGTH_SHORT).show()
                      return
                  }
-@@ -472,7 +476,7 @@ class MainActivity : ComponentActivity() {
+@@ -472,7 +476,7 @@
      }
  
      private fun launchGame(game: Library.SteamGame, returnHome: Boolean = false): Boolean {
@@ -38,7 +46,7 @@ index 6d3cf99b..7ac1ee44 100644
              android.widget.Toast.makeText(this, R.string.main_wait_install_game, android.widget.Toast.LENGTH_SHORT).show()
              return false
          }
-@@ -1215,6 +1219,7 @@ class MainActivity : ComponentActivity() {
+@@ -1215,6 +1219,7 @@
                  onCancel = { id -> ProtonExtras.tools.firstOrNull { it.id == id }?.let { ProtonExtras.unqueue(this, it) }; protons.refreshProtons() },
                  onRemove = { id, dir -> protons.removeProton(id, dir) },
                  onRemoveOlder = { id -> protons.removeProton(id, older = true) },
@@ -46,7 +54,7 @@ index 6d3cf99b..7ac1ee44 100644
              ),
              protonOptions = {
                  com.droiddeck.launcher.ui.ProtonOptions(
-@@ -1728,7 +1733,7 @@ class MainActivity : ComponentActivity() {
+@@ -1728,7 +1733,7 @@
      private fun runtimeChangesBlocked(): Boolean =
          busy || LinuxRuntimeInstaller.isBusy() || SessionState.running ||
              SessionState.phase !in setOf(SessionPhase.IDLE, SessionPhase.FAILED) ||
@@ -56,10 +64,9 @@ index 6d3cf99b..7ac1ee44 100644
  
      private fun removeDesktop() {
 diff --git a/app/src/main/java/com/droiddeck/launcher/ProtonMenu.kt b/app/src/main/java/com/droiddeck/launcher/ProtonMenu.kt
-index e73babbc..e82a782e 100644
 --- a/app/src/main/java/com/droiddeck/launcher/ProtonMenu.kt
 +++ b/app/src/main/java/com/droiddeck/launcher/ProtonMenu.kt
-@@ -6,6 +6,7 @@ import androidx.compose.runtime.mutableIntStateOf
+@@ -6,6 +6,7 @@
  import androidx.compose.runtime.mutableStateOf
  import androidx.compose.runtime.setValue
  import com.droiddeck.launcher.session.ProtonExtras
@@ -67,7 +74,26 @@ index e73babbc..e82a782e 100644
  import com.droiddeck.launcher.ui.ProtonRow
  import com.droiddeck.launcher.session.SessionState
  
-@@ -42,8 +43,31 @@ internal class ProtonMenu(private val activity: android.app.Activity, private va
+@@ -14,7 +15,11 @@
+  * an install or removal in progress, and whether a newer release is out. The launcher screen keeps
+  * one and shows it.
+  */
+-internal class ProtonMenu(private val activity: android.app.Activity, private val ui: android.os.Handler) {
++internal class ProtonMenu(
++    private val activity: android.app.Activity,
++    private val ui: android.os.Handler,
++    private val onInstalledChanged: () -> Unit = {},
++) {
+     var protonRows by mutableStateOf<List<ProtonRow>>(emptyList())
+     var protonBusyId by mutableStateOf<String?>(null)
+     var protonStage by mutableStateOf<String?>(null)
+@@ -37,13 +42,38 @@
+                 protonStage = null
+                 protonPercent = -1
+                 refreshProtons()
++                onInstalledChanged()
+                 if (problem != null) android.widget.Toast.makeText(activity, problem, android.widget.Toast.LENGTH_LONG).show()
+             }
          }, "install-proton-$id").start()
      }
  
@@ -85,6 +111,7 @@ index e73babbc..e82a782e 100644
 +                protonStage = null
 +                protonPercent = -1
 +                refreshProtons()
++                onInstalledChanged()
 +                com.droiddeck.launcher.ui.PatchToast.makeText(activity, problem ?: activity.getString(R.string.proton_import_done), android.widget.Toast.LENGTH_LONG).show()
 +            }
 +        }, "import-proton").start()
@@ -99,10 +126,15 @@ index e73babbc..e82a782e 100644
          val tool = ProtonExtras.tools.firstOrNull { it.id == id } ?: return
          if (protonBusyId != null || SessionState.running) return
          protonBusyId = id
-@@ -59,11 +83,29 @@ internal class ProtonMenu(private val activity: android.app.Activity, private va
+@@ -55,15 +85,35 @@
+                 protonBusyId = null
+                 protonStage = null
+                 refreshProtons()
++                onInstalledChanged()
+             }
          }, "remove-proton-$id").start()
-     }
- 
++    }
++
 +    private fun removeImportedProton(id: String) {
 +        if (protonBusyId != null || SessionState.running || ProtonImport.inProgress) return
 +        val imported = ProtonImport.installed(activity).firstOrNull { it.id == id } ?: return
@@ -116,11 +148,12 @@ index e73babbc..e82a782e 100644
 +                protonStage = null
 +                protonPercent = -1
 +                refreshProtons()
++                onInstalledChanged()
 +                if (problem != null) com.droiddeck.launcher.ui.PatchToast.makeText(activity, problem, android.widget.Toast.LENGTH_LONG).show()
 +            }
 +        }, "remove-imported-proton").start()
-+    }
-+
+     }
+ 
      fun refreshProtons() {
          protonRows = ProtonExtras.tools.map {
              val all = ProtonExtras.installedAll(activity, it)
@@ -131,10 +164,9 @@ index e73babbc..e82a782e 100644
  
      /** Looks for newer releases, at most every few hours (see ProtonExtras.checkLatest); quiet offline. */
 diff --git a/app/src/main/java/com/droiddeck/launcher/ui/ComponentsPage.kt b/app/src/main/java/com/droiddeck/launcher/ui/ComponentsPage.kt
-index 48ac4a28..e7b8c1c5 100644
 --- a/app/src/main/java/com/droiddeck/launcher/ui/ComponentsPage.kt
 +++ b/app/src/main/java/com/droiddeck/launcher/ui/ComponentsPage.kt
-@@ -643,6 +643,13 @@ fun ComponentsPage(
+@@ -643,6 +643,13 @@
                  }
              }
              PROTON_TAB -> {
@@ -148,7 +180,7 @@ index 48ac4a28..e7b8c1c5 100644
                  // Not installed, and installed with a newer release out: an update goes in beside the
                  // build it replaces, which stays until it is removed (games are mapped to it by name).
                  val rows = protons.rows.filter { it.installed == null || it.update != null }
-@@ -1654,6 +1661,7 @@ class ProtonsState(
+@@ -1654,6 +1661,7 @@
  )
  
  class ProtonsActions(
@@ -156,33 +188,7 @@ index 48ac4a28..e7b8c1c5 100644
      val onInstall: (String) -> Unit = {},
      val onCancel: (String) -> Unit = {},
      /** The source's id and the installed folder to delete. */
-diff --git a/app/src/main/res/values-ja/strings.xml b/app/src/main/res/values-ja/strings.xml
-index a788642f..55b60fc5 100644
---- a/app/src/main/res/values-ja/strings.xml
-+++ b/app/src/main/res/values-ja/strings.xml
-@@ -1,5 +1,20 @@
- <?xml version="1.0" encoding="utf-8"?>
- <resources>
-+    <string name="proton_import_title">ファイルからProtonを追加</string>
-+    <string name="proton_import_note">端末にダウンロードしたARM64版Proton（.tar.gz / .tar.xz）を選択します。同じProtonは上書き更新します。</string>
-+    <string name="proton_import_pick">ファイルを選択</string>
-+    <string name="proton_import_copying">Protonアーカイブをコピー中</string>
-+    <string name="proton_import_extracting">Protonを検証・展開中</string>
-+    <string name="proton_import_done">Protonを追加しました。Steamを起動し、ゲームの「プロパティ → 互換性」で選択してください。</string>
-+    <string name="proton_import_format">Protonの .tar.gz または .tar.xz アーカイブを選択してください。</string>
-+    <string name="proton_import_too_large">アーカイブが大きすぎます（圧縮時4GB、展開時16GBまで）。</string>
-+    <string name="proton_import_no_space">Protonの導入に必要な空き容量がありません。空き容量を増やして再試行してください。</string>
-+    <string name="proton_import_invalid">アーカイブが破損しているか、安全に展開できないか、対応するProtonではありません。</string>
-+    <string name="proton_import_not_arm64">ARM64版のWineとwineserverが含まれていません。ARM64版Protonを選択してください。</string>
-+    <string name="proton_import_exists">同名のフォルダまたは別のProtonが存在します。管理対象を確認できないため上書きできません。</string>
-+    <string name="proton_import_read_failed">ファイルを読み込めませんでした。ダウンロードを完了してから再選択してください。</string>
-+    <string name="proton_import_failed">Protonを追加・削除できませんでした。アプリのログを確認してください。</string>
-+
-     <string name="app_name">DroidDeck</string>
-     <string-array name="loading_hints">
-         <item>初回起動時はSteamをダウンロードします。数分かかる場合があります。</item>
 diff --git a/app/src/main/res/values/strings.xml b/app/src/main/res/values/strings.xml
-index ce6d2a68..aac6b9e0 100644
 --- a/app/src/main/res/values/strings.xml
 +++ b/app/src/main/res/values/strings.xml
 @@ -1,5 +1,20 @@
@@ -206,3 +212,27 @@ index ce6d2a68..aac6b9e0 100644
      <string name="app_name">DroidDeck</string>
      <string-array name="loading_hints">
          <item>First run downloads Steam. This may take a few minutes.</item>
+diff --git a/app/src/main/res/values-ja/strings.xml b/app/src/main/res/values-ja/strings.xml
+--- a/app/src/main/res/values-ja/strings.xml
++++ b/app/src/main/res/values-ja/strings.xml
+@@ -1,5 +1,20 @@
+ <?xml version="1.0" encoding="utf-8"?>
+ <resources>
++    <string name="proton_import_title">ファイルからProtonを追加</string>
++    <string name="proton_import_note">端末にダウンロードしたARM64版Proton（.tar.gz / .tar.xz）を選択します。同じProtonは上書き更新します。</string>
++    <string name="proton_import_pick">ファイルを選択</string>
++    <string name="proton_import_copying">Protonアーカイブをコピー中</string>
++    <string name="proton_import_extracting">Protonを検証・展開中</string>
++    <string name="proton_import_done">Protonを追加しました。Steamを起動し、ゲームの「プロパティ → 互換性」で選択してください。</string>
++    <string name="proton_import_format">Protonの .tar.gz または .tar.xz アーカイブを選択してください。</string>
++    <string name="proton_import_too_large">アーカイブが大きすぎます（圧縮時4GB、展開時16GBまで）。</string>
++    <string name="proton_import_no_space">Protonの導入に必要な空き容量がありません。空き容量を増やして再試行してください。</string>
++    <string name="proton_import_invalid">アーカイブが破損しているか、安全に展開できないか、対応するProtonではありません。</string>
++    <string name="proton_import_not_arm64">ARM64版のWineとwineserverが含まれていません。ARM64版Protonを選択してください。</string>
++    <string name="proton_import_exists">同名のフォルダまたは別のProtonが存在します。管理対象を確認できないため上書きできません。</string>
++    <string name="proton_import_read_failed">ファイルを読み込めませんでした。ダウンロードを完了してから再選択してください。</string>
++    <string name="proton_import_failed">Protonを追加・削除できませんでした。アプリのログを確認してください。</string>
++
+     <string name="app_name">DroidDeck</string>
+     <string-array name="loading_hints">
+         <item>初回起動時はSteamをダウンロードします。数分かかる場合があります。</item>
