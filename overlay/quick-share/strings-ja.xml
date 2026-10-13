@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="quick_share_unavailable">Quick Shareを開けませんでした。Google Play開発者サービスとQuick Shareが利用可能か確認してください。</string>
+</resources>

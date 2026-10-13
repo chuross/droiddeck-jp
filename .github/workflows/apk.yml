@@ -15,6 +15,7 @@ on:
       - 'overlay/suspend-survival/**'
       - 'overlay/readable-toasts/**'
       - 'overlay/log-share/**'
+      - 'overlay/quick-share/**'
       - 'upstream.lock.json'
       - '.github/workflows/apk.yml'
   workflow_dispatch:
@@ -157,4 +158,5 @@ jobs:
         if: always()
         working-directory: ${{ github.workspace }}
         run: rm -rf source
+
 

@@ -11,3 +11,6 @@
 - [ARM64 Proton修正](overlay/proton-ntcontext/): ExperimentalベースPLOPのNULL修正とDXGI Budget cap。
 - [ビルドキャッシュ](overlay/build-cache/): 検証済み依存ソースを再利用してAPKビルドを短縮。
 - [ログ共有](overlay/log-share/): 実ログを変更せず省メモリの共有snapshotを作成。
+
+
+- [Quick Share](overlay/quick-share/): ログをBluetooth既定設定を経由せずQuick Shareへ共有。

@@ -170,7 +170,9 @@ class PrepareTest(unittest.TestCase):
              patch.object(builder.PATCHES["readable-toasts"], "check"), \
              patch.object(builder.PATCHES["readable-toasts"], "apply"), \
              patch.object(builder.PATCHES["log-share"], "check"), \
-             patch.object(builder.PATCHES["log-share"], "apply"):
+             patch.object(builder.PATCHES["log-share"], "apply"), \
+             patch.object(builder.PATCHES["quick-share"], "check"), \
+             patch.object(builder.PATCHES["quick-share"], "apply"):
             builder.overlay(self.source)
         for name, text in preserved.items():
             self.assertEqual((target / name).read_text(), text)
@@ -204,6 +206,7 @@ class PrepareTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
 
 
 
