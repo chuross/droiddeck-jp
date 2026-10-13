@@ -5,7 +5,7 @@
 - [Steam診断](overlay/steam-diagnostics/): 標準ログの解析と選択Protonの照合。
 - [Protonファイル導入](overlay/proton-import/): ファイル選択でARM64版Protonを追加・削除。
 - [トースト表示](overlay/readable-toasts/): Proton導入・ログ削除などの通知を白文字と濃色背景で表示。
-- [Low Memoryモード](overlay/low-memory/): DXVK DXGI申告メモリ・QueryVideoMemoryInfo Budget cap。
+- [Low Memoryモード](overlay/low-memory/): DXGI Budget制限・Steam未使用メモリ回収・Decky停止。
 - [スリープ診断](overlay/suspend-survival/): 終了原因・復帰状態の記録と実験用WakeLock保持。
 
 - [ARM64 Proton修正](overlay/proton-ntcontext/): ExperimentalベースPLOPのNULL修正とDXGI Budget cap。

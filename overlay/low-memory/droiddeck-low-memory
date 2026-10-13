@@ -11,6 +11,9 @@ SESSION = "DROIDDECK_SESSION_LOW_MEMORY"
 PROFILER = "DROIDDECK_MEMORY_PROFILER"
 GPU = "DROIDDECK_GPU_MEMORY_MB"
 ALLOCATOR = "DROIDDECK_LOW_MEMORY_ALLOCATOR"
+STEAM_TRIM = "DROIDDECK_LOW_MEMORY_STEAM_TRIM"
+DECKY = "DROIDDECK_LOW_MEMORY_SKIP_DECKY"
+SESSION_TRIM = "DROIDDECK_SESSION_STEAM_TRIM"
 BASE_GLIBC = "DROIDDECK_SESSION_GLIBC_BASE"
 LOW_GLIBC = "DROIDDECK_SESSION_GLIBC_LOW"
 MALLOC = {
@@ -36,7 +39,7 @@ def shared_settings(env):
         if config.get("version") != 1:
             raise ValueError("unsupported configuration")
         for key, value in config.get("shared", {}).items():
-            if key in (MODE, PROFILER, ALLOCATOR):
+            if key in (MODE, PROFILER, ALLOCATOR, STEAM_TRIM, DECKY):
                 if value is None:
                     result.pop(key, None)
                 elif isinstance(value, str):
@@ -99,6 +102,15 @@ def game_environment(env):
     own = result.get("DXVK_CONFIG", "").strip().rstrip(";")
     options = "dxgi.maxDeviceMemory = %s; dxgi.maxSharedMemory = %s" % (budget, budget)
     result["DXVK_CONFIG"] = (own + "; " if own else "") + options
+    # Ask the existing agent to reclaim CEF caches while the game is loading,
+    # before its window has appeared. No extra resident process is started.
+    if enabled(result.get(SESSION_TRIM, "0")):
+        base = result.get("BL_LAUNCH_DIR", "")
+        if os.path.isabs(base):
+            try:
+                (Path(base) / "agent/steam-memory-request").touch()
+            except OSError:
+                pass  # The agent is optional; a failed request never blocks Proton.
     print("low-memory: game overlay/HUD off, FEX dynamic L1 on/L2 off", file=sys.stderr)
     return result
 
@@ -112,6 +124,8 @@ def main():
         return 0
     print("export DROIDDECK_SESSION_LOW_MEMORY=" + ("1" if low else "0"))
     print("export DROIDDECK_LOW_MEMORY=" + ("1" if low else "0"))
+    print("export DROIDDECK_SESSION_STEAM_TRIM=" + ("1" if low and enabled(env.get(STEAM_TRIM, "1")) else "0"))
+    print("export DROIDDECK_SESSION_SKIP_DECKY=" + ("1" if low and enabled(env.get(DECKY, "1")) else "0"))
     if low:
         print("export BL_MANGOAPP=0")
         for name, value in (("FEX_DYNAMICL1CACHE", "1"), ("FEX_DISABLEL2CACHE", "1"),

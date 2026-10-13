@@ -1,27 +1,39 @@
+diff --git a/app/src/main/java/com/droiddeck/launcher/core/GameEnvironmentOptions.kt b/app/src/main/java/com/droiddeck/launcher/core/GameEnvironmentOptions.kt
+index 078ae816..67495b6c 100644
 --- a/app/src/main/java/com/droiddeck/launcher/core/GameEnvironmentOptions.kt
 +++ b/app/src/main/java/com/droiddeck/launcher/core/GameEnvironmentOptions.kt
-@@ -8,4 +8,7 @@
- 
+@@ -7,6 +7,11 @@ object GameEnvironmentOptions {
+     data class Option(val name: String, val value: String, val detail: Int, val type: Type, val choices: List<String> = emptyList())
+
      val all = listOf(
++        Option("DROIDDECK_LOW_MEMORY_STEAM_TRIM", "1", R.string.jp_steam_trim_hint, Type.TOGGLE, listOf("0", "1")),
++        Option("DROIDDECK_LOW_MEMORY_SKIP_DECKY", "1", R.string.jp_skip_decky_hint, Type.TOGGLE, listOf("0", "1")),
 +        Option("DROIDDECK_LOW_MEMORY_ALLOCATOR", "1", R.string.jp_allocator_hint, Type.TOGGLE, listOf("0", "1")),
 +        Option("DROIDDECK_MEMORY_PROFILER", "0", R.string.jp_memory_profiler_hint, Type.TOGGLE, listOf("0", "1")),
 +        Option("DROIDDECK_GPU_MEMORY_MB", "2048", R.string.jp_gpu_memory_hint, Type.CHOICE, listOf("0", "1024", "2048", "3072")),
          Option("MESA_SHADER_CACHE_DISABLE", "false", R.string.game_env_cache, Type.TOGGLE, listOf("false", "true")),
          Option("VKD3D_FEATURE_LEVEL", "12_2", R.string.game_env_feature, Type.CHOICE, listOf("12_2", "12_1", "12_0", "11_1", "11_0")),
+         Option("VKD3D_SHADER_MODEL", "6_9", R.string.game_env_shader, Type.CHOICE, listOf("6_9", "6_8", "6_7", "6_6", "6_5", "6_4", "6_3", "6_2", "6_1", "6_0", "5_1")),
+diff --git a/app/src/main/java/com/droiddeck/launcher/session/GameEnvironmentStore.kt b/app/src/main/java/com/droiddeck/launcher/session/GameEnvironmentStore.kt
+index fa0aa507..94396aaa 100644
 --- a/app/src/main/java/com/droiddeck/launcher/session/GameEnvironmentStore.kt
 +++ b/app/src/main/java/com/droiddeck/launcher/session/GameEnvironmentStore.kt
-@@ -70,4 +70,5 @@
+@@ -69,6 +69,7 @@ object GameEnvironmentStore {
+     fun publish(context: Context, config: GameEnvironment.Config = read(context)) {
          val resolved = config.copy(shared = GameEnvironment.defaults(SessionPrefs.fexPreset(context), SessionPrefs.forceSsbs(context)) + config.shared)
          val json = encode(resolved)
 +        json.put("sessionLowMemory", SessionPrefs.lowMemoryEnabled(context))
          // The Display page's texture filtering, as DXVK options the launcher appends to
          // DXVK_CONFIG after the profiles - a user's own DXVK_CONFIG entry keeps its options.
+         val dxvk = TextureFiltering.dxvkOptions(
+diff --git a/app/src/main/java/com/droiddeck/launcher/session/SessionPrefs.kt b/app/src/main/java/com/droiddeck/launcher/session/SessionPrefs.kt
+index 828a6c7c..f9ee2ff2 100644
 --- a/app/src/main/java/com/droiddeck/launcher/session/SessionPrefs.kt
 +++ b/app/src/main/java/com/droiddeck/launcher/session/SessionPrefs.kt
-@@ -40,4 +40,21 @@
+@@ -40,6 +40,23 @@ object SessionPrefs {
      fun backActionsOrder(inverted: Boolean): Int =
          if (inverted) BACK_QAM_THEN_MENU else BACK_MENU_THEN_QAM
-+
+
 +    /** Global across Steam, Desktop and direct app sessions; migrate the former shared profile. */
 +    fun lowMemoryEnabled(context: Context): Boolean {
 +        val settings = prefs(context)
@@ -38,60 +50,87 @@
 +        prefs(context).edit().putBoolean("jpLowMemory", on).apply()
 +        GameEnvironmentStore.publish(context)
 +    }
- 
++
      private fun prefs(context: Context) = context.getSharedPreferences("session", Context.MODE_PRIVATE)
+
+     val orientationOptions = listOf(
+diff --git a/app/src/main/java/com/droiddeck/launcher/session/SessionService.kt b/app/src/main/java/com/droiddeck/launcher/session/SessionService.kt
+index 2f606dcd..2ae3b67a 100644
 --- a/app/src/main/java/com/droiddeck/launcher/session/SessionService.kt
 +++ b/app/src/main/java/com/droiddeck/launcher/session/SessionService.kt
-@@ -643,4 +643,5 @@
+@@ -642,6 +642,7 @@ class SessionService : Service() {
+         // glibc's per-thread rseq registration is refused by Android's app seccomp policy, so
          // every thread start paid a SIGSYS that proot answers; the malloc top pad grows the heap
          // 16 MB at a time instead of 128 KB, and every brk(2) is a proot stop too.
 +        Log.i(TAG, "low-memory: requested=" + (if (SessionPrefs.lowMemoryEnabled(this)) "ON" else "OFF") + " (session startup)")
          guest.add("GLIBC_TUNABLES=glibc.pthread.rseq=0:glibc.malloc.top_pad=16777216")
          if (SessionState.mode == MODE_STEAM) guest.add("BL_MANGOAPP=" + (if (SessionPrefs.mangoapp(this)) "1" else "0"))
+         if (SessionState.mode == MODE_STEAM) {
+diff --git a/app/src/main/java/com/droiddeck/launcher/ui/GameEnvironmentEditor.kt b/app/src/main/java/com/droiddeck/launcher/ui/GameEnvironmentEditor.kt
+index 51c8fdf5..d25e68a5 100644
 --- a/app/src/main/java/com/droiddeck/launcher/ui/GameEnvironmentEditor.kt
 +++ b/app/src/main/java/com/droiddeck/launcher/ui/GameEnvironmentEditor.kt
-@@ -165,5 +165,5 @@
+@@ -164,7 +164,7 @@ internal fun GameEnvironmentEditor(byPad: Boolean, initialScope: String = "", on
+         if (current == null && !error) Small(stringResource(R.string.game_env_loading))
          if (current != null) {
              val own = current.entries(scope)
 -            val entries = GameEnvironment.effective(current, preset, scope, forceSsbs).toSortedMap()
 +            val entries = GameEnvironment.effective(current, preset, scope, forceSsbs).filterKeys { it != "DROIDDECK_LOW_MEMORY" }.toSortedMap()
              if (entries.isEmpty()) Small(stringResource(R.string.game_env_empty))
              else Panel {
+                 entries.entries.forEachIndexed { i, (name, value) ->
+diff --git a/app/src/main/java/com/droiddeck/launcher/ui/ModeSettingsDialog.kt b/app/src/main/java/com/droiddeck/launcher/ui/ModeSettingsDialog.kt
+index 2ec97d7a..714552b8 100644
 --- a/app/src/main/java/com/droiddeck/launcher/ui/ModeSettingsDialog.kt
 +++ b/app/src/main/java/com/droiddeck/launcher/ui/ModeSettingsDialog.kt
-@@ -285,4 +285,5 @@
+@@ -284,6 +284,7 @@ fun ModeSheetRows(s: ModeSettings, a: ModeSettingsActions, tab: String, extras:
+     }
      if (tab == SheetTab.SESSION) {
          SettingsGroup(stringResource(R.string.mode_session)) {
 +            LowMemoryRow()
              ChoiceRow(
                  host, "suspend", stringResource(R.string.mode_suspend),
+                 stringResource(R.string.mode_suspend_hint),
+diff --git a/app/src/main/res/values-ja/strings.xml b/app/src/main/res/values-ja/strings.xml
+index a788642f..29435386 100644
 --- a/app/src/main/res/values-ja/strings.xml
 +++ b/app/src/main/res/values-ja/strings.xml
-@@ -2089,3 +2089,8 @@
+@@ -2088,4 +2088,11 @@
+     <plurals name="games_already_n">
          <item quantity="other">%1$d 本はすでにゲームにあります</item>
      </plurals>
 +    <string name="jp_low_memory">Low Memory モード</string>
-+    <string name="jp_low_memory_hint">Steam・デスクトップ・全アプリ共通の省メモリ設定です。glibc・FEXを省メモリ化し、対応するゲームHUD・Steam Overlayを停止してメモリを記録します。次回セッション起動から反映され、実行中のセッションには反映されません。OFFにすると次回起動時に通常設定へ戻ります。</string>
++    <string name="jp_low_memory_hint">Steam・デスクトップ・全アプリ共通の省メモリ設定です。glibc・FEX・HUD・Overlayを調整します。Steamのゲーム起動・表示中にWeb UIの未使用メモリを回収し、Deckyの常駐を停止します。次回セッションから反映され、OFFにすると次回起動時に通常設定へ戻ります。</string>
 +    <string name="jp_memory_profiler_hint">共有設定で有効にすると、読み取れるプロセスのPSSとシステム・swapを5秒ごとに記録。通常プレイでは標準OFF。測定自体がプレイへ影響する場合があります。読取不可のPSSとGPU確保量は不明として扱います。保存先はセッション内のmemory.jsonl。</string>
 +    <string name="jp_gpu_memory_hint">実験用：DXVK DXGIのGPUメモリ申告値（MB）。Low Memory時は標準2048MB（未設定・0も2048MB）で、有効な明示値を優先します。patched ProtonではBudgetも制限し、通常のD3D12＋VKD3D-Proton経路も対象です。ゲームが値を利用する場合のみ効果があり、RAM使用量の上限ではありません。</string>
 +    <string name="jp_allocator_hint">Low Memoryモード時、glibcをtop_pad=1MB・arena_max=2・trim_threshold=128KBに設定。共有設定は次回セッションからSteam・gamescope・Xwaylandに、ゲーム別設定は次回起動時に適用。0でallocatorの変更だけ無効にして比較できます。Low MemoryをOFFにして再起動すると従来の設定に戻ります。性能への影響は環境によります。</string>
++    <string name="jp_steam_trim_hint">共有設定：Low Memory時にSteam Web UIの未使用メモリ回収を促します。ゲーム起動・表示中に実行し、メモリ不足時の再試行は120秒以上空けます。Steamとゲームは終了させません。0で停止して比較できます。回収量は環境によります。PSSの変化はセッションログに記録します。次回セッションから反映。</string>
++    <string name="jp_skip_decky_hint">共有設定：Low Memory時はDecky loaderとプラグインを起動しません。導入済みファイルや有効設定は変更せず、Low MemoryをOFFにすると次回セッションで戻ります。0でLow Memory中もDeckyを使用できます。次回セッションから反映。</string>
  </resources>
+diff --git a/app/src/main/res/values/strings.xml b/app/src/main/res/values/strings.xml
+index ce6d2a68..1e6d1092 100644
 --- a/app/src/main/res/values/strings.xml
 +++ b/app/src/main/res/values/strings.xml
-@@ -2288,3 +2288,8 @@
+@@ -2287,4 +2287,11 @@
+     <string name="desktop_size">Size on disk</string>
      <string name="desktop_uninstall_title">Uninstall the desktop?</string>
      <string name="desktop_all_systems">All</string>
 +    <string name="jp_low_memory">Low Memory Mode</string>
-+    <string name="jp_low_memory_hint">Shared by all Steam, Desktop and app sessions. Saves memory through glibc and FEX settings; disables supported game HUDs and Steam overlays, and records memory. Applies only when starting the next session. Turning it off restores normal settings in the next session.</string>
++    <string name="jp_low_memory_hint">Shared by all Steam, Desktop and app sessions. Tunes glibc, FEX, HUDs and overlays. Reclaims unused Steam Web UI memory on game launch and during gameplay, and skips Decky. Applies at the next session start; turning it off restores normal settings next session.</string>
 +    <string name="jp_memory_profiler_hint">Shared profile: record visible process PSS and system/swap memory every 5 seconds. Off by default during normal play; measurements may affect gameplay. Unreadable PSS and GPU allocations remain unknown. Logs: memory.jsonl in the session folder.</string>
 +    <string name="jp_gpu_memory_hint">Experimental DXVK DXGI reported GPU memory in MB. Low Memory Mode defaults to 2048 MB (also when unset or 0); valid explicit values take priority. Patched Proton also caps budgets, including the normal D3D12 + VKD3D-Proton path. Only games using these values may benefit; this is not a RAM limit.</string>
 +    <string name="jp_allocator_hint">Low Memory Mode: use glibc top_pad=1MB, arena_max=2, trim_threshold=128KB. Shared profile applies to Steam, gamescope and Xwayland at next session; game profile applies at next launch. Set 0 to compare without allocator changes. Turning Low Memory Mode off restores the previous tunables on restart. Performance may vary.</string>
++    <string name="jp_steam_trim_hint">Shared profile: request unused Steam Web UI memory reclamation in Low Memory Mode on game launch and during gameplay. Pressure retries are at least 120 seconds apart. Steam and games stay running. Set 0 to compare without reclamation. Savings vary; observed PSS changes are recorded in the session log. Applies next session.</string>
++    <string name="jp_skip_decky_hint">Shared profile: skip the Decky loader and plugins in Low Memory Mode. Installed files and the saved enable setting are preserved; turning Low Memory Mode off restores Decky next session. Set 0 to keep Decky in Low Memory Mode. Applies next session.</string>
  </resources>
+diff --git a/app/src/test/java/com/droiddeck/launcher/session/GameEnvironmentStoreTest.kt b/app/src/test/java/com/droiddeck/launcher/session/GameEnvironmentStoreTest.kt
+index d499437e..5bc832ea 100644
 --- a/app/src/test/java/com/droiddeck/launcher/session/GameEnvironmentStoreTest.kt
 +++ b/app/src/test/java/com/droiddeck/launcher/session/GameEnvironmentStoreTest.kt
-@@ -26,4 +26,27 @@
+@@ -25,6 +25,29 @@ class GameEnvironmentStoreTest {
+         File(context.filesDir, "game-environment.json").delete()
      }
- 
+
 +    @Test fun lowMemoryMigratesSharedModeAndThenRemainsGlobal() {
 +        context.getSharedPreferences("session", Context.MODE_PRIVATE).edit().clear().commit()
 +        GameEnvironmentStore.save(context, GameEnvironment.Config(
@@ -117,9 +156,38 @@
 +
      @Test fun savedSettingsAndPublishedSettingsPreserveUnsetsAndLiteralValues() {
          val config = GameEnvironment.Config(
+             shared = mapOf("LITERAL" to "a=b 'quoted' $(echo test)", "EMPTY" to ""),
+diff --git a/tools/linuxfs/overlay/usr/local/bin/droiddeck-agent b/tools/linuxfs/overlay/usr/local/bin/droiddeck-agent
+index b0e8efcf..bae3fdf7 100755
+--- a/tools/linuxfs/overlay/usr/local/bin/droiddeck-agent
++++ b/tools/linuxfs/overlay/usr/local/bin/droiddeck-agent
+@@ -22,6 +22,7 @@ import base64
+ import json
+ import math
+ import os
++import runpy
+ import selectors
+ import signal
+ import socket
+@@ -693,6 +694,12 @@ def serve(agent_dir, focus=True, poll=0.1):
+     can_focus = focus and bool(os.environ.get("DISPLAY"))
+     if can_focus:
+         FocusWatcher(agent_dir / "focus.json").start()
++        if os.environ.get("DROIDDECK_SESSION_STEAM_TRIM") == "1":
++            try:
++                memory = runpy.run_path("/usr/local/bin/droiddeck-steam-memory")
++                memory["start"](agent_dir, cdp_targets, WebSocket, log)
++            except Exception as error:
++                log("steam-memory: helper unavailable (%s)" % type(error).__name__)
+     write_json(agent_dir / "hello.json", {"pid": os.getpid(), "version": VERSION, "started": int(time.time() * 1000),
+                                           "displays": displays(), "focus": can_focus})
+     log("serving %s (focus %s)" % (agent_dir, "on" if can_focus else "off"))
+diff --git a/tools/linuxfs/overlay/usr/local/bin/droiddeck-game-env b/tools/linuxfs/overlay/usr/local/bin/droiddeck-game-env
+index 260b6f93..44f39113 100755
 --- a/tools/linuxfs/overlay/usr/local/bin/droiddeck-game-env
 +++ b/tools/linuxfs/overlay/usr/local/bin/droiddeck-game-env
-@@ -309,4 +309,13 @@
+@@ -308,6 +308,15 @@ def main():
+                 env = apply_config(env, {"version": 1}, app_id, fixes)
          except (OSError, ValueError, TypeError, AttributeError):
              print("droiddeck-game-env: invalid configuration; using inherited environment", file=sys.stderr)
 +    if (len(command) > 1 and command[1] == "waitforexitandrun"
@@ -133,9 +201,13 @@
 +            print("low-memory: settings not applied (%s)" % error, file=sys.stderr)
      env = force_ssbs(command, env)
      sync = load_sync()
+     launch, launch_env = select_sync(command, env, sync)
+diff --git a/tools/linuxfs/overlay/usr/local/bin/droiddeck-session b/tools/linuxfs/overlay/usr/local/bin/droiddeck-session
+index 931e24b3..2d5a3490 100755
 --- a/tools/linuxfs/overlay/usr/local/bin/droiddeck-session
 +++ b/tools/linuxfs/overlay/usr/local/bin/droiddeck-session
-@@ -84,4 +84,56 @@
+@@ -83,6 +83,62 @@ clear_stale_tmp() {
+
  # Until the runtime is stable, Steam's own logs are copied beside the session log at exit so a
  # failed launch can be handed over as one folder.
 +# Shared low-memory settings are resolved before gamescope starts MangoApp.
@@ -156,6 +228,10 @@
 +        "export GALLIUM_HUD=") export GALLIUM_HUD= ;;
 +        "export SteamNoOverlayUI=1") export SteamNoOverlayUI=1 ;;
 +        "export BL_MANGOAPP=0") export BL_MANGOAPP=0 ;;
++        "export DROIDDECK_SESSION_STEAM_TRIM=0") export DROIDDECK_SESSION_STEAM_TRIM=0 ;;
++        "export DROIDDECK_SESSION_STEAM_TRIM=1") export DROIDDECK_SESSION_STEAM_TRIM=1 ;;
++        "export DROIDDECK_SESSION_SKIP_DECKY=0") export DROIDDECK_SESSION_SKIP_DECKY=0 ;;
++        "export DROIDDECK_SESSION_SKIP_DECKY=1") export DROIDDECK_SESSION_SKIP_DECKY=1 ;;
 +        "export DROIDDECK_SESSION_LOW_MEMORY_ALLOCATOR=1") export DROIDDECK_SESSION_LOW_MEMORY_ALLOCATOR=1 ;;
 +        "export DROIDDECK_SESSION_MEMORY_PROFILER=1") export DROIDDECK_SESSION_MEMORY_PROFILER=1 ;;
 +      esac
@@ -192,3 +268,17 @@
 +
  collect_steam_logs() {
    [ -n "${BL_DEBUG_DIR:-}" ] || return 0
+   local steam_root=${XDG_DATA_HOME:-$HOME/.local/share}/Steam
+@@ -808,7 +864,11 @@ BUSCONF
+     # reaped with the client session. Native ARM64 runs directly. A legacy x86_64 asset is used
+     # only when its recorded architecture says so and droiddeck-fex has FEX and its runtime ready.
+     decky_loader=$HOME/homebrew/services/PluginLoader
+-    if [ -f "$HOME/.droiddeck-decky-enabled" ] && [ -x "$decky_loader" ]; then
++    if [ "${DROIDDECK_SESSION_SKIP_DECKY:-0}" = 1 ] && [ -f "$HOME/.droiddeck-decky-enabled" ]; then
++      echo "== low-memory: Decky loader/plugins skipped for this session (saved setting unchanged)"
++    fi
++    if [ "${DROIDDECK_SESSION_SKIP_DECKY:-0}" != 1 ] \
++       && [ -f "$HOME/.droiddeck-decky-enabled" ] && [ -x "$decky_loader" ]; then
+       decky_arch=$(cat "$HOME/homebrew/services/.droiddeck-decky-arch" 2>/dev/null || echo unknown)
+       if [ "$decky_arch" = arm64 ] || { [ "$decky_arch" = x86_64 ] && /usr/local/bin/droiddeck-fex prepare >/dev/null; }; then
+         (

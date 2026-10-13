@@ -97,7 +97,37 @@ class LowMemoryTest(unittest.TestCase):
         self.assertIn("export FEX_DISABLEL2CACHE=1\n", on)
         self.assertIn("export MANGOHUD=0\n", on)
         off = self.run_session({LOW["MODE"]: "1"}, session=False, raw=True)
-        self.assertEqual(off, "export DROIDDECK_SESSION_LOW_MEMORY=0\nexport DROIDDECK_LOW_MEMORY=0\n")
+        self.assertEqual(off, "export DROIDDECK_SESSION_LOW_MEMORY=0\nexport DROIDDECK_LOW_MEMORY=0\n"
+                         "export DROIDDECK_SESSION_STEAM_TRIM=0\nexport DROIDDECK_SESSION_SKIP_DECKY=0\n")
+
+    def test_steam_reclaim_and_decky_skip_are_snapshotted_with_independent_opt_outs(self):
+        for trim, decky in (("1", "1"), ("0", "1"), ("1", "0"), ("0", "0")):
+            on = self.run_session({LOW["STEAM_TRIM"]: trim, LOW["DECKY"]: decky}, session=True, raw=True)
+            self.assertIn("export DROIDDECK_SESSION_STEAM_TRIM=" + trim + "\n", on)
+            self.assertIn("export DROIDDECK_SESSION_SKIP_DECKY=" + decky + "\n", on)
+            off = self.run_session({LOW["STEAM_TRIM"]: trim, LOW["DECKY"]: decky}, session=False, raw=True)
+            self.assertIn("export DROIDDECK_SESSION_STEAM_TRIM=0\n", off)
+            self.assertIn("export DROIDDECK_SESSION_SKIP_DECKY=0\n", off)
+        default = self.run_session({}, session=True, raw=True)
+        self.assertIn("export DROIDDECK_SESSION_STEAM_TRIM=1\n", default)
+        self.assertIn("export DROIDDECK_SESSION_SKIP_DECKY=1\n", default)
+
+    def test_launch_requests_cef_reclaim_only_for_enabled_session_without_blocking_proton(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            agent = base / "agent"
+            agent.mkdir()
+            request = agent / "steam-memory-request"
+            env = {LOW["SESSION"]: "1", LOW["SESSION_TRIM"]: "1", "BL_LAUNCH_DIR": directory}
+            LOW["game_environment"](env)
+            self.assertTrue(request.exists())
+            request.unlink()
+            for mode, trim in (("0", "1"), ("1", "0")):
+                LOW["game_environment"](dict(env, **{LOW["SESSION"]: mode, LOW["SESSION_TRIM"]: trim}))
+                self.assertFalse(request.exists())
+            agent.rmdir()
+            # The missing/failed agent must not prevent starting a game.
+            self.assertIn("DXVK_CONFIG", LOW["game_environment"](env))
 
     def test_session_snapshot_ignores_per_game_mode_and_live_shared_changes(self):
         on = LOW["game_environment"]({LOW["SESSION"]: "1", LOW["MODE"]: "0"})
@@ -156,7 +186,8 @@ class LowMemoryTest(unittest.TestCase):
         hook = script.split("# Shared low-memory settings", 1)[1].split("collect_steam_logs() {", 1)[0]
         hook = "# Shared low-memory settings" + hook
         hook = hook.replace("/usr/local/bin/droiddeck-low-memory", str(source / "tools/linuxfs/overlay/usr/local/bin/droiddeck-low-memory"))
-        keys = ("GLIBC_TUNABLES", LOW["BASE_GLIBC"], LOW["LOW_GLIBC"])
+        keys = ("GLIBC_TUNABLES", LOW["BASE_GLIBC"], LOW["LOW_GLIBC"],
+                LOW["SESSION_TRIM"], "DROIDDECK_SESSION_SKIP_DECKY")
         child = "import json,os; print(json.dumps({k:os.environ.get(k) for k in %r}))" % (keys,)
         code = hook + "\n" + shlex.quote(sys.executable) + " -c " + shlex.quote(child)
         baseline = "glibc.pthread.rseq=0:glibc.malloc.top_pad=16777216:glibc.malloc.tcache_count=7"
@@ -170,6 +201,8 @@ class LowMemoryTest(unittest.TestCase):
                                         GLIBC_TUNABLES=baseline, BL_INSIDE=""),
                                         capture_output=True, text=True, check=True)
                 values = json.loads(result.stdout.splitlines()[-1])
+                self.assertEqual(values[LOW["SESSION_TRIM"]], mode)
+                self.assertEqual(values["DROIDDECK_SESSION_SKIP_DECKY"], mode)
                 state = "ON" if mode == "1" else "OFF"
                 allocation = "ON" if mode == allocator == "1" else "OFF"
                 self.assertIn("== low-memory: mode=%s allocator=%s profiler_requested=0" % (state, allocation), result.stdout)

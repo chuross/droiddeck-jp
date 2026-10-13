@@ -5,7 +5,7 @@ import subprocess
 
 ROOT = Path(__file__).resolve().parent
 PATCH = ROOT / "low-memory.patch"
-HELPERS = ("droiddeck-low-memory", "droiddeck-memory-profiler")
+HELPERS = ("droiddeck-low-memory", "droiddeck-memory-profiler", "droiddeck-steam-memory")
 ASSETS = tuple("usr/local/bin/" + name for name in HELPERS)
 KOTLIN = "app/src/main/java/com/droiddeck/launcher/ui/LowMemoryRow.kt"
 
