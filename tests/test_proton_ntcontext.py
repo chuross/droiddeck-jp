@@ -352,7 +352,7 @@ def synthetic_pe(export="CreateDXGIFactory", machine=0xaa64, hybrid=True, marker
     return bytes(data) + marker
 
 
-class ExperimentalPackageTest(unittest.TestCase):
+class DroidDeckPackageTest(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
@@ -360,7 +360,7 @@ class ExperimentalPackageTest(unittest.TestCase):
         self.lock = json.loads((ROOT / "build.lock.json").read_text())
         self.lock_path = self.task / "build.lock.json"
         self.lock_path.write_text(json.dumps(self.lock))
-        self.tree = self.task / "base" / self.lock["base_name"]
+        self.tree = self.task / "base" / self.lock["base_directory"]
         self.tree.mkdir(parents=True)
         for name in ("proton", "toolmanifest.vdf", "LICENSE"):
             (self.tree / name).write_text("upstream")
@@ -394,8 +394,8 @@ class ExperimentalPackageTest(unittest.TestCase):
         (results / "ntdll.dll").write_bytes(synthetic_pe(export="NtGetContextThread", marker=b"patched"))
         (results / "dxvk").mkdir()
         (results / "dxvk/dxgi.dll").write_bytes(synthetic_pe(marker=b"patched"))
-        subprocess.run(["tar", "-cJf", str(self.task / "base.tar.xz"), "-C", str(self.task / "base"), self.lock["base_name"]], check=True)
-        self.lock["base_sha256"] = package.sha256(self.task / "base.tar.xz")
+        subprocess.run(["tar", "-czf", str(self.task / "base.tar.gz"), "-C", str(self.task / "base"), self.lock["base_directory"]], check=True)
+        self.lock["base_sha256"] = package.sha256(self.task / "base.tar.gz")
         self.lock_path.write_text(json.dumps(self.lock))
         self.heads = [self.lock[key] + "\n" for key in ("proton_commit", "wine_commit", "dxvk_commit")]
 
@@ -423,10 +423,10 @@ class ExperimentalPackageTest(unittest.TestCase):
         self.assertTrue((packaged / "droiddeck-source/source.tar.xz").is_file())
         self.assertEqual((packaged / "LICENSE.proton").read_text(), "Valve license")
         self.assertTrue((self.task / "dist" / release.asset_names(self.lock)[0]).is_file())
-        self.assertEqual(release.asset_names(self.lock), ["proton-plop-11.0-droiddeck-arm64.tar.gz"])
-        updated = dict(self.lock, build_name="proton-plop-11.0-20261012-arm64-droiddeck")
-        self.assertEqual(release.asset_names(updated), release.asset_names(self.lock))
-        self.assertIn("20261001", metadata["build_name"])
+        self.assertEqual(release.asset_names(self.lock), ["DroidDeck-Proton-11-7.5-droiddeck-aarch64.tar.gz"])
+        updated = dict(self.lock, build_name="DroidDeck-Proton-11-7.6-droiddeck")
+        self.assertNotEqual(release.asset_names(updated), release.asset_names(self.lock))
+        self.assertIn("11-7.5", metadata["build_name"])
         self.assertEqual((packaged / "files/bin/wine").read_bytes(),
                          (packaged / "files/bin-arm64/wine").read_bytes())
         importer["validate"](packaged)
@@ -442,7 +442,7 @@ class ExperimentalPackageTest(unittest.TestCase):
         (self.task / "results/ntdll.dll").write_bytes(synthetic_pe(export="Wrong"))
         with self.assertRaisesRegex(ValueError, "interface"):
             self.invoke()
-        stock = self.task / "unpacked" / self.lock["base_name"]
+        stock = self.task / "unpacked" / self.lock["base_directory"]
         self.assertEqual(package.original_ntdll(stock).read_bytes(), package.original_ntdll(self.tree).read_bytes())
 
     def test_source_mismatch_prevents_packaging(self):
@@ -455,7 +455,7 @@ class ExperimentalPackageTest(unittest.TestCase):
         (self.task / "results/dxvk/dxgi.dll").write_bytes(synthetic_pe(machine=0x8664))
         with self.assertRaisesRegex(ValueError, "architecture mismatch"):
             self.invoke()
-        self.assertEqual(package.original_ntdll(self.task / "unpacked" / self.lock["base_name"]).read_bytes(),
+        self.assertEqual(package.original_ntdll(self.task / "unpacked" / self.lock["base_directory"]).read_bytes(),
                          package.original_ntdll(self.tree).read_bytes())
 
     def test_missing_patch_evidence_prevents_packaging(self):
@@ -464,32 +464,14 @@ class ExperimentalPackageTest(unittest.TestCase):
             self.invoke()
 
 
-class UpstreamMatchTest(unittest.TestCase):
-    def test_matching_sources_pass_and_changed_wine_is_rejected(self):
-        tree = {"tree": [
-            {"path": "wine", "mode": "160000", "type": "commit", "sha": "b" * 40},
-            {"path": "dxvk", "mode": "160000", "type": "commit", "sha": "d" * 40}]}
-        for wine, passes in (("b" * 40, True), ("c" * 40, False)):
-            with patch.object(release, "api", side_effect=[
-                    {"object": {"type": "commit", "sha": "a" * 40}}, tree]):
-                if passes:
-                    self.assertEqual(release.check_upstream("plop-11.0-20261001", wine, "d" * 40), "a" * 40)
-                else:
-                    with self.assertRaisesRegex(RuntimeError, "differs"):
-                        release.check_upstream("plop-11.0-20261001", wine, "d" * 40)
-
-
-class ExperimentalReleaseTest(unittest.TestCase):
+class DroidDeckReleaseTest(unittest.TestCase):
     def setUp(self):
         self.lock = json.loads((ROOT / "build.lock.json").read_text())
         self.resolve = Mock(return_value=("a" * 40, "b" * 40, "d" * 40, self.lock["sdk_image"]))
-        self.upstream = {"tag_name": "plop-11.0-20261001", "published_at": "2026-10-01",
-                         "assets": [{"name": "proton-plop-11.0-20261001-arm64.tar.xz",
+        self.upstream = {"tag_name": "DroidDeck-Proton-11-7.5", "published_at": "2026-10-01",
+                         "assets": [{"name": "DroidDeck-Proton-11-7.5-aarch64.tar.gz",
                                      "digest": "sha256:" + "c" * 64,
-                                     "browser_download_url": "https://github.com/loathingKernel/Proton/releases/download/plop-11.0-20261001/proton-plop-11.0-20261001-arm64.tar.xz"}]}
-        checker = patch.object(release, "check_upstream", return_value="e" * 40)
-        checker.start()
-        self.addCleanup(checker.stop)
+                                     "browser_download_url": "https://github.com/Droid-Deck/DroidDeck-Proton/releases/download/DroidDeck-Proton-11-7.5/DroidDeck-Proton-11-7.5-aarch64.tar.gz"}]}
 
     def ge_release(self):
         return None
@@ -501,15 +483,15 @@ class ExperimentalReleaseTest(unittest.TestCase):
         return {"isDraft": False, "body": plan["source_marker"],
                 "assets": [{"name": name} for name in release.asset_names(plan["lock"])]}
 
-    def test_experimental_branch_resolves_exact_source_and_removes_ge_archive(self):
+    def test_droiddeck_release_resolves_exact_sources(self):
         plan = self.plan()
         self.assertTrue(plan["build"])
         self.assertEqual(plan["tag"], "0.3.2")
         self.assertEqual(plan["lock"]["proton_commit"], "a" * 40)
         self.assertEqual(plan["lock"]["wine_commit"], "b" * 40)
         self.assertEqual(plan["lock"]["dxvk_commit"], "d" * 40)
-        self.assertIn("loathingKernel/Proton", plan["lock"]["base_archive"])
-        self.resolve.assert_called_once_with("plop-11.0-20261001")
+        self.assertIn("Droid-Deck/DroidDeck-Proton", plan["lock"]["base_archive"])
+        self.resolve.assert_called_once_with("DroidDeck-Proton-11-7.5")
         self.assertEqual(plan["lock"]["base_sha256"], "c" * 64)
 
     def test_unchanged_complete_release_skips_and_manual_rebuilds(self):
@@ -552,11 +534,13 @@ class ExperimentalReleaseTest(unittest.TestCase):
     def test_resolve_branch_uses_wine_submodule_and_arm_sdk_at_exact_commit(self):
         makefile = ("else ifeq ($(TARGET_ARCH),arm64)\n"
                     "\tSTEAMRT_IMAGE ?= " + self.lock["sdk_image"] + "\nendif\n")
-        responses = [{"object": {"type": "commit", "sha": "a" * 40}},
-                     {"tree": [{"path": "wine", "mode": "160000", "type": "commit", "sha": "b" * 40}, {"path": "dxvk", "mode": "160000", "type": "commit", "sha": "d" * 40}]},
+        responses = [{"tree": [{"path": "wine", "mode": "160000", "type": "commit", "sha": "b" * 40}, {"path": "dxvk", "mode": "160000", "type": "commit", "sha": "d" * 40}]},
                      {"content": base64.b64encode(makefile.encode()).decode()}]
-        with patch.object(release, "api", side_effect=responses) as api:
-            self.assertEqual(release.resolve_source("plop-11.0-20261001"),
+        info = {"name": "DroidDeck-Proton-11-7.5-aarch64", "banner_proton_commit": "a" * 40,
+                "proton_wine_commit": "b" * 40, "sdk_image": self.lock["sdk_image"]}
+        with patch.object(release, "build_info", return_value=info), \
+                patch.object(release, "api", side_effect=responses) as api:
+            self.assertEqual(release.resolve_source("DroidDeck-Proton-11-7.5"),
                              ("a" * 40, "b" * 40, "d" * 40, self.lock["sdk_image"]))
         self.assertTrue(api.call_args_list[-1].args[0].endswith("?ref=" + "a" * 40))
         with self.assertRaises(RuntimeError):
@@ -564,12 +548,39 @@ class ExperimentalReleaseTest(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             release.arm64_sdk(makefile.replace("registry.gitlab.steamos.cloud", "example.org"))
 
+    def test_build_info_must_match_exact_source_and_sdk(self):
+        info = {"name": "DroidDeck-Proton-11-7.5-aarch64", "banner_proton_commit": "a" * 40,
+                "proton_wine_commit": "b" * 40, "sdk_image": self.lock["sdk_image"]}
+        tree = {"tree": [{"path": name, "mode": "160000", "type": "commit", "sha": sha * 40}
+                         for name, sha in (("wine", "b"), ("dxvk", "d"))]}
+        makefile = "else ifeq ($(TARGET_ARCH),arm64)\n\tSTEAMRT_IMAGE ?= " + self.lock["sdk_image"] + "\nendif\n"
+        for field, value in (("name", "other"), ("banner_proton_commit", "invalid"),
+                             ("proton_wine_commit", "c" * 40), ("sdk_image", "other")):
+            with self.subTest(field=field), \
+                    patch.object(release, "build_info", return_value=dict(info, **{field: value})), \
+                    patch.object(release, "api", side_effect=[tree, {"content": base64.b64encode(makefile.encode()).decode()}]):
+                with self.assertRaisesRegex(RuntimeError, "provenance"):
+                    release.resolve_source("DroidDeck-Proton-11-7.5")
+
+    def test_latest_arm_release_uses_numeric_versions_and_excludes_unpublished(self):
+        releases = []
+        for version in ("11-7.5", "11-7.10", "11-8", "12-1"):
+            tag = "DroidDeck-Proton-" + version
+            releases.append({"tag_name": tag, "published_at": "2026-10-01",
+                             "assets": [{"name": tag + "-aarch64.tar.gz"}]})
+        releases[-1]["prerelease"] = True
+        self.assertEqual(release.latest_arm_release(releases)["tag_name"], "DroidDeck-Proton-11-8")
+        releases[-2]["draft"] = True
+        self.assertEqual(release.latest_arm_release(releases)["tag_name"], "DroidDeck-Proton-11-7.10")
+        with self.assertRaisesRegex(RuntimeError, "No published"):
+            release.latest_arm_release([dict(self.upstream, assets=[])])
+
     def test_unexpected_wine_tree_is_rejected(self):
         for tree in ({"tree": []}, {"truncated": True, "tree": []}):
-            with patch.object(release, "api", side_effect=[
-                    {"object": {"type": "commit", "sha": "a" * 40}}, tree]):
+            with patch.object(release, "build_info", return_value={"name": "DroidDeck-Proton-11-7.5-aarch64", "banner_proton_commit": "a" * 40}), \
+                    patch.object(release, "api", return_value=tree):
                 with self.assertRaisesRegex(RuntimeError, "submodule"):
-                    release.resolve_source("plop-11.0-20261001")
+                    release.resolve_source("DroidDeck-Proton-11-7.5")
 
     def prepare_assets(self, directory, plan):
         for name in release.asset_names(plan["lock"]) + [plan["lock"]["build_name"] + "-wine-source.tar.xz"]:
@@ -588,7 +599,7 @@ class ExperimentalReleaseTest(unittest.TestCase):
                                {"name": "GE-Proton11-7-droiddeck-wine-source.tar.xz"},
                                {"name": "Proton-SHA256SUMS"}, {"name": "proton-build.json"},
                                {"name": "signal-arm64ec-disassembly.txt"}]}
-        dated = self.lock["build_name"] + "-aarch64.tar.gz"
+        dated = "proton-plop-11.0-20261001-arm64-droiddeck-aarch64.tar.gz"
         older_version = "proton-plop-10.0-droiddeck-arm64.tar.gz"
         existing["assets"].extend([{"name": dated}, {"name": older_version}])
         with tempfile.TemporaryDirectory() as temporary:

@@ -1,4 +1,4 @@
-"""Replace validated ARM64X DLLs in the public PLOP ARM64 build."""
+"""Replace validated ARM64X DLLs in the public DroidDeck-Proton ARM64 build."""
 import argparse
 import hashlib
 import json
@@ -151,7 +151,7 @@ def import_layout(tree):
         for name in ("wine", "wineserver"):
             target = native / name
             if not importer["arm64_elf"](target):
-                raise ValueError("PLOP native " + name + " is not ARM64")
+                raise ValueError("DroidDeck-Proton native " + name + " is not ARM64")
             alias = directory / name
             if not alias.exists() and not alias.is_symlink():
                 alias.symlink_to("../bin-arm64/" + name)
@@ -161,8 +161,8 @@ def import_layout(tree):
 
 def package(task, manager, lock_path=None):
     lock = json.loads((lock_path or ROOT / "build.lock.json").read_text())
-    if lock["proton_repository"] != "https://github.com/loathingKernel/Proton.git":
-        raise ValueError("expected Valve Experimental source")
+    if lock["proton_repository"] != "https://github.com/Droid-Deck/DroidDeck-Proton.git":
+        raise ValueError("expected DroidDeck-Proton source")
     for name, expected in (("", lock["proton_commit"]), ("wine", lock["wine_commit"]),
                            ("dxvk", lock["dxvk_commit"])):
         actual = subprocess.check_output(
@@ -176,14 +176,14 @@ def package(task, manager, lock_path=None):
             raise ValueError("patch evidence is missing")
         subprocess.run(["git", "-C", str(task / "proton" / name), "apply", "--reverse",
                         "--check", str(ROOT / patch)], check=True)
-    archive = task / "base.tar.xz"
+    archive = task / "base.tar.gz"
     if sha256(archive) != lock["base_sha256"]:
         raise ValueError("base archive checksum mismatch")
     staging = task / "unpacked"
     staging.mkdir()
-    subprocess.run(["tar", "-xJf", str(archive), "--same-permissions", "-C", str(staging)], check=True)
+    subprocess.run(["tar", "-xzf", str(archive), "--same-permissions", "-C", str(staging)], check=True)
     tree = base_tree(staging)
-    if tree.name != lock["base_name"]:
+    if tree.name != lock["base_directory"]:
         raise ValueError("base archive build name differs from source plan")
     for name in ("proton", "toolmanifest.vdf", "LICENSE"):
         if not (tree / name).is_file():

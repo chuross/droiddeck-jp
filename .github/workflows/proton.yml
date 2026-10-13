@@ -33,7 +33,7 @@ jobs:
           python-version: '3.12'
       - name: Helper and automation tests
         run: python3 -m unittest discover -s tests -v
-      - name: Resolve public PLOP build and matching Experimental sources
+      - name: Resolve public DroidDeck-Proton build and exact sources
         id: plan
         run: >-
           python3 overlay/proton-ntcontext/release.py plan
@@ -54,7 +54,7 @@ jobs:
       - name: Rebuild ntdll and DXGI and replace stock DLLs
         if: steps.plan.outputs.build == 'true'
         run: bash overlay/proton-ntcontext/build.sh candidate-proton.lock.json
-      - name: Attach Proton to current DroidDeck Release and record built Experimental commit
+      - name: Attach Proton to current DroidDeck Release and record built DroidDeck-Proton commit
         if: steps.plan.outputs.build == 'true'
         run: >-
           python3 overlay/proton-ntcontext/release.py publish

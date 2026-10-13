@@ -7,8 +7,8 @@ mkdir -p "$task_root"
 cp "${1:-$manager_root/overlay/proton-ntcontext/build.lock.json}" "$task_root/build.lock.json"
 lock="$task_root/build.lock.json"
 read_lock() { python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))[sys.argv[2]])' "$lock" "$1"; }
-curl -fL --retry 5 "$(read_lock base_archive)" -o "$task_root/base.tar.xz"
-printf '%s  %s\n' "$(read_lock base_sha256)" "$task_root/base.tar.xz" | sha256sum --check
+curl -fL --retry 5 "$(read_lock base_archive)" -o "$task_root/base.tar.gz"
+printf '%s  %s\n' "$(read_lock base_sha256)" "$task_root/base.tar.gz" | sha256sum --check
 git clone --filter=blob:none --no-checkout "$(read_lock proton_repository)" "$task_root/proton"
 git -C "$task_root/proton" fetch --depth=1 origin "$(read_lock proton_commit)"
 git -C "$task_root/proton" checkout --detach FETCH_HEAD

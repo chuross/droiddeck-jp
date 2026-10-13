@@ -8,7 +8,7 @@
 - [Low Memoryモード](overlay/low-memory/): DXGI Budget制限・Steam未使用メモリ回収・Decky停止。
 - [スリープ診断](overlay/suspend-survival/): 終了原因・復帰状態の記録と実験用WakeLock保持。
 
-- [ARM64 Proton修正](overlay/proton-ntcontext/): ExperimentalベースPLOPのNULL修正とDXGI Budget cap。
+- [ARM64 Proton修正](overlay/proton-ntcontext/): DroidDeck-ProtonベースのNULL修正とDXGI Budget cap。
 - [ビルドキャッシュ](overlay/build-cache/): 検証済み依存ソースを再利用してAPKビルドを短縮。
 - [ログ共有](overlay/log-share/): 実ログを変更せず省メモリの共有snapshotを作成。
 
