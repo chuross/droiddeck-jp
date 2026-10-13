@@ -10,7 +10,7 @@ import subprocess
 import sys
 
 ROOT = Path(__file__).resolve().parents[1]
-PATCH_NAMES = ("japanese-fonts", "proton-logs", "steam-diagnostics", "proton-import", "build-cache", "low-memory", "suspend-survival", "readable-toasts", "log-share", "quick-share")
+PATCH_NAMES = ("japanese-fonts", "proton-logs", "steam-diagnostics", "proton-import", "build-cache", "low-memory", "suspend-survival", "readable-toasts", "log-share", "quick-share", "ci-stability")
 
 
 def load_patch(name):

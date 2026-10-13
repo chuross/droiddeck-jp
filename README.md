@@ -14,3 +14,4 @@
 
 
 - [Quick Share](overlay/quick-share/): ログをBluetooth既定設定を経由せずQuick Shareへ共有。
+- [CI安定化](overlay/ci-stability/): 依存関係検出の範囲とテスト待機スレッドを修正。

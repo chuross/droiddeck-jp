@@ -16,6 +16,7 @@ on:
       - 'overlay/readable-toasts/**'
       - 'overlay/log-share/**'
       - 'overlay/quick-share/**'
+      - 'overlay/ci-stability/**'
       - 'upstream.lock.json'
       - '.github/workflows/apk.yml'
   workflow_dispatch:
