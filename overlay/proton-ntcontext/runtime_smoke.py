@@ -25,6 +25,10 @@ def run_probe(task, tree, probe, targets, phase):
     env = dict(os.environ, WINEPREFIX=str(prefix), WINEDEBUG="-all,+loaddll",
                WINESERVER=str(binary / "wineserver"),
                WINEDLLPATH=str(lib / "vkd3d") + ":" + str(lib / "wine"),
+               # Proton normally installs native graphics DLLs into system32.
+               # The headless probe loads them from the depot instead; include
+               # these directories for d3d12core's native dxgi dependency.
+               WINEPATH=windows_path(targets["dxgi"].parent) + ";" + windows_path(targets["vkd3d"].parent),
                LD_LIBRARY_PATH=":".join(library_paths) + ":" + os.environ.get("LD_LIBRARY_PATH", ""),
                WINEDLLOVERRIDES="dxgi,d3d12core=n;winemenubuilder.exe=d",
                FEX_DISKCACHE="0", FEX_APP_CONFIG=str(config),
@@ -36,6 +40,7 @@ def run_probe(task, tree, probe, targets, phase):
                                      windows_path(targets["dxgi"]), windows_path(targets["vkd3d"])],
                                     env=env, stdout=output, stderr=subprocess.STDOUT, timeout=120)
         if result.returncode or "DROIDDECK_RUNTIME_OK " + phase not in log.read_text():
+            print("\n".join(log.read_text().splitlines()[-40:]))
             raise RuntimeError(phase + " Wine/DLL runtime check failed; see " + str(log))
     finally:
         subprocess.run([str(binary / "wineserver"), "-k"], env=env, timeout=30, check=False)
