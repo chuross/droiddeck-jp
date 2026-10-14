@@ -417,7 +417,7 @@ class DroidDeckPackageTest(unittest.TestCase):
             run.side_effect = execute
             package.package(self.task, "manager", self.lock_path)
 
-    def test_stock_dlls_are_replaced_with_source_and_validated_arm64x(self):
+    def test_public_build_preserves_stock_dlls_and_import_layout(self):
         importer = __import__("runpy").run_path(str(ROOT.parent / "proton-import/droiddeck-proton-import"))
         with self.assertRaises(importer["ImportProblem"]) as failure:
             importer["validate"](self.tree)
@@ -428,8 +428,16 @@ class DroidDeckPackageTest(unittest.TestCase):
         self.assertEqual(metadata["proton_commit"], self.lock["proton_commit"])
         self.assertEqual(metadata["dxvk_dxgi_architecture"], "ARM64X")
         self.assertEqual(metadata["vkd3d_core_architecture"], "ARM64X")
-        self.assertIn("vkd3d-low-memory-pools", metadata["features"])
-        self.assertNotEqual(metadata["original_vkd3d_core_sha256"], metadata["rebuilt_vkd3d_core_sha256"])
+        self.assertEqual(metadata["dll_profile"], "stock")
+        self.assertEqual(metadata["features"], [])
+        self.assertEqual(metadata["patches"], [])
+        self.assertEqual(metadata["replaced_dlls"], [])
+        for original, installed in (("original_ntdll_sha256", "rebuilt_ntdll_sha256"),
+                                    ("original_dxvk_dxgi_sha256", "rebuilt_dxvk_dxgi_sha256"),
+                                    ("original_vkd3d_core_sha256", "rebuilt_vkd3d_core_sha256")):
+            self.assertEqual(metadata[original], metadata[installed])
+        for locate in (package.original_ntdll, package.original_dxvk, package.original_vkd3d):
+            self.assertEqual(locate(packaged).read_bytes(), locate(self.tree).read_bytes())
         self.assertTrue((packaged / "droiddeck-source/vkd3d-low-memory/droiddeck_memory.h").is_file())
         self.assertTrue((packaged / "droiddeck-source/source.tar.xz").is_file())
         self.assertEqual((packaged / "LICENSE.proton").read_text(), "Valve license")
@@ -622,10 +630,34 @@ class DroidDeckReleaseTest(unittest.TestCase):
         for name in release.asset_names(plan["lock"]) + [plan["lock"]["build_name"] + "-wine-source.tar.xz"]:
             (directory / name).write_text("evidence")
         (directory / "proton-build.json").write_text(json.dumps(
-            dict(plan["lock"], manager_commit="e" * 40)))
+            dict(plan["lock"], manager_commit="e" * 40, dll_profile="stock",
+                 replaced_dlls=[], features=[], patches=[],
+                 original_ntdll_sha256="a" * 64, rebuilt_ntdll_sha256="a" * 64,
+                 original_dxvk_dxgi_sha256="b" * 64, rebuilt_dxvk_dxgi_sha256="b" * 64,
+                 original_vkd3d_core_sha256="c" * 64, rebuilt_vkd3d_core_sha256="c" * 64)))
         (directory / "SHA256SUMS").write_text("".join(
             hashlib.sha256((directory / name).read_bytes()).hexdigest() + "  " + name + "\n"
             for name in release.asset_names(plan["lock"]) + [plan["lock"]["build_name"] + "-wine-source.tar.xz"]))
+
+    def test_candidate_profiles_and_changed_stock_hashes_cannot_be_published(self):
+        plan = self.plan()
+        for change in ({"dll_profile": "all"}, {"replaced_dlls": ["ntdll"]},
+                       {"features": ["ntcontext-null-fix"]},
+                       {"rebuilt_ntdll_sha256": "d" * 64},
+                       {"original_dxvk_dxgi_sha256": ""}):
+            with self.subTest(change=change), tempfile.TemporaryDirectory() as temporary:
+                directory = Path(temporary)
+                self.prepare_assets(directory, plan)
+                path = directory / "proton-build.json"
+                manifest = json.loads(path.read_text())
+                manifest.update(change)
+                path.write_text(json.dumps(manifest))
+                with patch.object(release, "run") as run, \
+                        patch.object(release, "current_droiddeck_release") as current:
+                    with self.assertRaises(RuntimeError):
+                        release.publish("chuross/droiddeck-patch", "e" * 40, plan, directory)
+                    run.assert_not_called()
+                    current.assert_not_called()
 
     def test_publish_overwrites_proton_on_apk_release_preserving_apk_notes_and_status(self):
         plan = self.plan()
@@ -751,5 +783,6 @@ class DroidDeckReleaseTest(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
 
 

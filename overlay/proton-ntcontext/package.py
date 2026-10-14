@@ -1,4 +1,4 @@
-"""Replace validated ARM64X DLLs in the public DroidDeck-Proton ARM64 build."""
+"""Package the upstream runtime without replacing its known-working DLLs."""
 import argparse
 import hashlib
 import json
@@ -233,10 +233,9 @@ def package(task, manager, lock_path=None):
     if (original_ntdll_hash == sha256(rebuilt) or original_dxvk_hash == sha256(rebuilt_graphics)
             or original_vkd3d_hash == sha256(rebuilt_d3d12)):
         raise ValueError("rebuilt DLL is unchanged")
-    # All three interfaces are validated before replacing any stock DLL.
-    write_preserving_mode(ntdll, rebuilt.read_bytes())
-    write_preserving_mode(dxvk, rebuilt_graphics.read_bytes())
-    write_preserving_mode(vkd3d, rebuilt_d3d12.read_bytes())
+    # Low Memory off does not undo DLL replacement. Export/architecture checks
+    # alone cannot establish runtime compatibility, so retain upstream DLLs.
+    # Rebuilt binaries remain build evidence only, never shipped as runtime DLLs.
     template = (task / "proton/compatibilitytool.vdf.template").read_text()
     if "##BUILD_NAME##" not in template or "##INTERNAL_TOOL_NAME##" not in template:
         raise ValueError("upstream compatibility template changed")
@@ -245,8 +244,10 @@ def package(task, manager, lock_path=None):
     if not sdk_digests:
         raise ValueError("SDK image digest is missing")
     metadata = dict(lock, manager_commit=manager, sdk_digests=sdk_digests,
-                    features=["ntcontext-null-fix", "dxvk-dxgi-memory-budget-cap", "vkd3d-low-memory-pools"],
-                    patches=["ntgetcontext-null.patch", "dxvk-memory-budget.patch", "vkd3d-low-memory.patch"],
+                    dll_profile="stock", replaced_dlls=[], features=[], patches=[],
+                    candidate_ntdll_sha256=sha256(rebuilt),
+                    candidate_dxvk_dxgi_sha256=sha256(rebuilt_graphics),
+                    candidate_vkd3d_core_sha256=sha256(rebuilt_d3d12),
                     original_ntdll_sha256=original_ntdll_hash, original_dxvk_dxgi_sha256=original_dxvk_hash,
                     rebuilt_ntdll_sha256=sha256(ntdll),
                     rebuilt_dxvk_dxgi_sha256=sha256(dxvk),
@@ -256,7 +257,7 @@ def package(task, manager, lock_path=None):
                     rebuilt_vkd3d_core_sha256=sha256(vkd3d),
                     vkd3d_core_architecture="ARM64X",
                     vkd3d_core_archive_path=str(vkd3d.relative_to(tree)),
-                    fix="ARM64EC NtGetContextThread(NULL) returns STATUS_INVALID_PARAMETER")
+                    fix="stock DLLs preserved for startup compatibility")
     (tree / "droiddeck-ntcontext-build.json").write_text(json.dumps(metadata, indent=2) + "\n")
     dist = task / "dist"
     dist.mkdir(exist_ok=True)
@@ -293,5 +294,6 @@ if __name__ == "__main__":
     parser.add_argument("--lock", type=Path)
     args = parser.parse_args()
     package(args.task.resolve(), args.manager, args.lock)
+
 
 

@@ -209,6 +209,14 @@ def publish(repository, manager, plan, directory):
     manifest = json.loads((directory / "proton-build.json").read_text())
     if manifest.get("manager_commit") != manager or any(manifest.get(key) != value for key, value in lock.items()):
         raise RuntimeError("Proton build provenance differs from release plan")
+    if (manifest.get("dll_profile") != "stock" or manifest.get("replaced_dlls") != []
+            or manifest.get("features") != [] or manifest.get("patches") != []):
+        raise RuntimeError("Only stock-DLL recovery builds may be published")
+    for original, installed in (("original_ntdll_sha256", "rebuilt_ntdll_sha256"),
+                                ("original_dxvk_dxgi_sha256", "rebuilt_dxvk_dxgi_sha256"),
+                                ("original_vkd3d_core_sha256", "rebuilt_vkd3d_core_sha256")):
+        if not re.fullmatch(r"[0-9a-f]{64}", manifest.get(original, "")) or manifest[original] != manifest.get(installed):
+            raise RuntimeError("Public Proton must preserve stock DLL hashes")
     expected = {}
     for path in (assets[0], directory / (lock["build_name"] + "-wine-source.tar.xz")):
         with path.open("rb") as archive:
@@ -288,5 +296,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
