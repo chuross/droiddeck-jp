@@ -226,7 +226,7 @@ def publish(repository, manager, plan, directory):
                 "vkd3d": manifest.get("original_vkd3d_core_sha256")}):
         raise RuntimeError("Default graphics must match the original release")
     if (delta.get("method") != "original-dll-arm64ec-leaf-guard"
-            or delta.get("maximum_modified_bytes") != 32
+            or delta.get("maximum_modified_bytes") != 36
             or delta.get("original_sha256") != manifest.get("original_ntdll_sha256")
             or delta.get("patched_sha256") != manifest.get("rebuilt_ntdll_sha256")
             or smoke.get("ntdll_stock_delta") != delta):

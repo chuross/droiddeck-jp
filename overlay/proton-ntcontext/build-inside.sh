@@ -2,6 +2,7 @@
 set -euo pipefail
 task_root="$1"
 manager_root="$2"
+python3 "$manager_root/overlay/proton-ntcontext/runtime_smoke.py" "$task_root" --guard-preflight
 cd "$task_root/proton/wine"
 autoreconf -fi
 XDG_CACHE_HOME="$task_root/cache" dlls/winevulkan/make_vulkan

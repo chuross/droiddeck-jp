@@ -688,7 +688,7 @@ class DroidDeckReleaseTest(unittest.TestCase):
                     release.resolve_source("DroidDeck-Proton-11-7.5")
 
     def prepare_assets(self, directory, plan):
-        delta = {"method": "original-dll-arm64ec-leaf-guard", "maximum_modified_bytes": 32,
+        delta = {"method": "original-dll-arm64ec-leaf-guard", "maximum_modified_bytes": 36,
                  "original_sha256": "a" * 64, "patched_sha256": "d" * 64}
         for name in release.asset_names(plan["lock"]) + [plan["lock"]["build_name"] + "-wine-source.tar.xz"]:
             (directory / name).write_text("evidence")

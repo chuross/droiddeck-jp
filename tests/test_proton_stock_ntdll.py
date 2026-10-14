@@ -17,6 +17,7 @@ class OriginalDllGuardTest(unittest.TestCase):
         struct.pack_into("<II", data, RECIPE["REDIRECTION_OFFSET"] - 4, 0xf42e0, RECIPE["ORIGINAL_ENTRY"])
         struct.pack_into("<Q", data, RECIPE["SYSCALL_POINTER_OFFSET"], 0x180000000 + RECIPE["ORIGINAL_ENTRY"])
         data[RECIPE["ORIGINAL_ENTRY"]:RECIPE["ORIGINAL_ENTRY"] + 4] = bytes.fromhex("f353bda9")
+        struct.pack_into("<i", data, RECIPE["ORIGINAL_ENTRY"] - 4, 0x1db01)
         return bytes(data)
 
     def test_only_leaf_guard_and_its_routing_change(self):
@@ -27,7 +28,10 @@ class OriginalDllGuardTest(unittest.TestCase):
             permitted = {i for start, length in report["changed_ranges"] for i in range(start, start + length)}
             self.assertEqual(len(candidate), len(original))
             self.assertTrue(all(i in permitted for i, (a, b) in enumerate(zip(original, candidate)) if a != b))
-            self.assertEqual(len(permitted), 32)
+            self.assertEqual(len(permitted), 36)
+            entry_prefix = struct.unpack_from("<i", candidate, RECIPE["GUARD_PREFIX_RVA"])[0]
+            self.assertEqual(entry_prefix & 1, 1)
+            self.assertEqual(RECIPE["GUARD_RVA"] + (entry_prefix & ~1), 0xeb600)
             self.assertEqual(struct.unpack_from("<Q", candidate, RECIPE["SYSCALL_POINTER_OFFSET"])[0],
                              0x180000000 + RECIPE["GUARD_RVA"])
             guard = struct.unpack_from("<4I", candidate, RECIPE["GUARD_RVA"])
@@ -59,4 +63,4 @@ class OriginalDllGuardTest(unittest.TestCase):
         original = Path(os.environ["DROIDDECK_STOCK_NTDLL"]).read_bytes()
         candidate = RECIPE["patch"](original)
         self.assertEqual(RECIPE["verify"](original, candidate)["patched_sha256"],
-                         "12fba0d81f743b76a747b04bd3ad59005eed50ccfd997bff6482a64be370e86e")
+                         "230be42fe184bf28932f84707c42d057560abae512b961f434dd79ce7c30fa59")

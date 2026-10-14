@@ -97,8 +97,30 @@ def verify(task):
     print("Stock and patched ARM64EC DLL loading passed")
 
 
+def guard_preflight(task):
+    staging = task / "guard-reference"
+    staging.mkdir()
+    subprocess.run(["tar", "-xzf", str(task / "base.tar.gz"), "-C", str(staging)], check=True)
+    tree = base_tree(staging)
+    targets = {"ntdll": original_ntdll(tree), "dxgi": original_dxvk(tree), "vkd3d": original_vkd3d(tree)}
+    probe = task / "results/guard-runtime-probe.exe"
+    subprocess.run(["x86_64-w64-mingw32-gcc", "-O2", "-Wall", "-Wextra",
+                    str(Path(__file__).with_name("runtime-probe.c")), "-o", str(probe)], check=True)
+    run_probe(task, tree, probe, targets, "guard-stock")
+    original = targets["ntdll"].read_bytes()
+    candidate = patch_stock_ntdll(original)
+    verify_stock_ntdll(original, candidate)
+    write_preserving_mode(targets["ntdll"], candidate)
+    run_probe(task, tree, probe, targets, "patched-guard-preflight")
+    shutil.rmtree(staging)
+    for phase in ("guard-stock", "patched-guard-preflight"):
+        shutil.rmtree(task / ("smoke-prefix-" + phase))
+    print("Original DLL leaf guard runtime preflight passed")
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("task", type=Path)
+    parser.add_argument("--guard-preflight", action="store_true")
     args = parser.parse_args()
-    verify(args.task.resolve())
+    (guard_preflight if args.guard_preflight else verify)(args.task.resolve())
