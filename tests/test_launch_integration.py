@@ -84,7 +84,7 @@ class LaunchIntegrationTest(unittest.TestCase):
                 self.assertEqual(env["LD_PRELOAD"], "/usr/lib/keep.so")
                 self.assertEqual(env["MANGOHUD"], "0")
                 self.assertEqual(env["FEX_DISABLEL2CACHE"], "1")
-                self.assertIn("dxgi.maxDeviceMemory = 2048", env["DXVK_CONFIG"])
+                self.assertEqual(env["DXVK_CONFIG"], original["DXVK_CONFIG"])
             self.env = dict(original, DROIDDECK_LOW_MEMORY="0")
             for _, _, env in self.run_launch(fallback):
                 for name, value in original.items():
@@ -178,3 +178,4 @@ class LaunchIntegrationTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+

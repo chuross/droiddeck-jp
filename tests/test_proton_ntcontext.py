@@ -383,6 +383,8 @@ class DroidDeckPackageTest(unittest.TestCase):
         (self.tree / "compatibilitytool.vdf").write_text(self.lock["build_name"])
         (self.tree / "proton").chmod(0o755)
         (self.tree / "proton").write_text('class Proton:\n    def arch_pe_dir(self, d, wow64):\n        return self.lib_dir + d + "/" + (self.wow64_pe_arch if wow64 else self.host_pe_arch) + "/"\n')
+        with (self.tree / "proton").open("a") as source:
+            source.write('class Session:\n    def setup(self):\n        if True:\n            self.env.setdefault("FEX_DISKCACHE", "1")\n')
         binaries = self.tree / "files/bin-arm64"
         binaries.mkdir(parents=True)
         header = b"\x7fELF\x02\x01" + b"\0" * 12 + (183).to_bytes(2, "little")
@@ -402,6 +404,10 @@ class DroidDeckPackageTest(unittest.TestCase):
         for name in ("wine", "dxvk", "vkd3d-proton"):
             (results / (name + "-patches.diff")).write_text("patch")
         (self.task / "sdk-digests.json").write_text('["sdk@sha256:digest"]')
+        (results / "ram-source-audit.json").write_text(json.dumps({
+            "method": "minimum-per-thread-FEX-lookup-table", "fex_commit": "14c92681f4d62cf84d901460e0358de09c8847a7",
+            "normal_maximum_lookup_bytes_per_thread": 16777216, "low_memory_lookup_bytes_per_thread": 131072,
+            "translated_code_cache": "preserved", "live_game_allocations": "unchanged"}))
         (self.task / "proton").mkdir()
         header = self.task / "proton/vkd3d-proton/libs/vkd3d/droiddeck_memory.h"
         header.parent.mkdir(parents=True)
@@ -473,6 +479,14 @@ class DroidDeckPackageTest(unittest.TestCase):
             self.assertTrue((packaged / metadata[key]).is_file())
         namespace = {"os": __import__("os")}
         exec((packaged / "proton").read_text(), namespace)
+        ram_module = __import__("types").ModuleType("droiddeck_ram")
+        exec((packaged / "droiddeck_ram.py").read_text(), ram_module.__dict__)
+        with patch.dict(__import__("sys").modules, droiddeck_ram=ram_module):
+            for mode in ("0", "1"):
+                session = namespace["Session"]()
+                session.env = {"DROIDDECK_SESSION_LOW_MEMORY": mode}
+                session.setup()
+                self.assertEqual("FEX_DYNAMICL1CACHEINCREASECOUNTHEURISTIC" in session.env, mode == "1")
         selector = namespace["Proton"]()
         selector.lib_dir = str(packaged / "files/lib") + "/"
         selector.host_pe_arch = "aarch64-windows"
@@ -696,6 +710,9 @@ class DroidDeckReleaseTest(unittest.TestCase):
             dict(plan["lock"], manager_commit="e" * 40, dll_profile="patched",
                  replaced_dlls=["ntdll", "dxgi", "vkd3d"],
                  ntdll_stock_delta=delta,
+                 ram_policy={"method": "minimum-per-thread-FEX-lookup-table", "fex_commit": "14c92681f4d62cf84d901460e0358de09c8847a7",
+                             "normal_maximum_lookup_bytes_per_thread": 16777216, "low_memory_lookup_bytes_per_thread": 131072,
+                             "translated_code_cache": "preserved", "live_game_allocations": "unchanged"},
                  default_graphics_sha256={"dxgi": "b" * 64, "vkd3d": "c" * 64},
                  features=["ntcontext-null-fix", "dxvk-dxgi-memory-budget-cap", "vkd3d-low-memory-pools"],
                  patches=["ntgetcontext-null.patch", "dxvk-memory-budget.patch", "vkd3d-low-memory.patch"],

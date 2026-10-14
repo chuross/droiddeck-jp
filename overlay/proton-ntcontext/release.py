@@ -213,6 +213,13 @@ def publish(repository, manager, plan, directory):
             or manifest.get("features") != ["ntcontext-null-fix", "dxvk-dxgi-memory-budget-cap", "vkd3d-low-memory-pools"]):
         raise RuntimeError("Expected the verified patched Proton build")
     smoke = manifest.get("runtime_verification", {})
+    ram = manifest.get("ram_policy", {})
+    if (ram.get("method") != "minimum-per-thread-FEX-lookup-table"
+            or ram.get("fex_commit") != "14c92681f4d62cf84d901460e0358de09c8847a7"
+            or ram.get("low_memory_lookup_bytes_per_thread") != 131072
+            or ram.get("translated_code_cache") != "preserved"
+            or ram.get("live_game_allocations") != "unchanged"):
+        raise RuntimeError("Proton RAM lookup-cache policy was not verified")
     upstream = manifest.get("upstream_graphics_patches", {})
     if ({item.get("component") for item in upstream.get("patches", [])} != {"dxvk", "vkd3d-proton"}
             or not upstream.get("prepared_files")):

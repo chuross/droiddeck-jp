@@ -101,7 +101,7 @@ index a788642f..29435386 100644
          <item quantity="other">%1$d 本はすでにゲームにあります</item>
      </plurals>
 +    <string name="jp_low_memory">Low Memory モード</string>
-+    <string name="jp_low_memory_hint">Steam・デスクトップ・全アプリ共通の省メモリ設定です。glibc・FEX・HUD・Overlayを調整します。Steamのゲーム起動・表示中にWeb UIの未使用メモリを回収し、Deckyの常駐を停止します。次回セッションから反映され、OFFにすると次回起動時に通常設定へ戻ります。</string>
++    <string name="jp_low_memory_hint">Steam・デスクトップ・全アプリ共通の省メモリ設定です。glibc・HUD・Overlayを調整し、対応ProtonではFEXの検索キャッシュ保持も削減します。CPU負荷によって速度が下がる場合があります。Steamのゲーム起動・表示中にWeb UIの未使用メモリを回収し、Deckyの常駐を停止します。次回セッションから反映され、OFFにすると次回起動時に通常設定へ戻ります。</string>
 +    <string name="jp_memory_profiler_hint">共有設定で有効にすると、読み取れるプロセスのPSSとシステム・swapを5秒ごとに記録。通常プレイでは標準OFF。測定自体がプレイへ影響する場合があります。読取不可のPSSとGPU確保量は不明として扱います。保存先はセッション内のmemory.jsonl。</string>
 +    <string name="jp_gpu_memory_hint">実験用：DXVK DXGIのGPUメモリ申告値（MB）。標準・未設定・0はドライバの申告値を維持します。明示した場合だけ変更します。patched ProtonではBudgetも制限し、通常のD3D12＋VKD3D-Proton経路も対象です。ゲームが値を利用する場合のみ効果があり、RAM使用量の上限ではありません。</string>
 +    <string name="jp_allocator_hint">Low Memoryモード時、glibcをtop_pad=1MB・arena_max=2・trim_threshold=128KBに設定。共有設定は次回セッションからSteam・gamescope・Xwaylandに、ゲーム別設定は次回起動時に適用。0でallocatorの変更だけ無効にして比較できます。Low MemoryをOFFにして再起動すると従来の設定に戻ります。性能への影響は環境によります。</string>
@@ -118,7 +118,7 @@ index ce6d2a68..1e6d1092 100644
      <string name="desktop_uninstall_title">Uninstall the desktop?</string>
      <string name="desktop_all_systems">All</string>
 +    <string name="jp_low_memory">Low Memory Mode</string>
-+    <string name="jp_low_memory_hint">Shared by all Steam, Desktop and app sessions. Tunes glibc, FEX, HUDs and overlays. Reclaims unused Steam Web UI memory on game launch and during gameplay, and skips Decky. Applies at the next session start; turning it off restores normal settings next session.</string>
++    <string name="jp_low_memory_hint">Shared by all Steam, Desktop and app sessions. Tunes glibc, HUDs and overlays. Supported custom Proton also reduces FEX lookup-cache retention; CPU-heavy workloads may run slower. Reclaims unused Steam Web UI memory on game launch and during gameplay, and skips Decky. Applies at the next session start; turning it off restores normal settings next session.</string>
 +    <string name="jp_memory_profiler_hint">Shared profile: record visible process PSS and system/swap memory every 5 seconds. Off by default during normal play; measurements may affect gameplay. Unreadable PSS and GPU allocations remain unknown. Logs: memory.jsonl in the session folder.</string>
 +    <string name="jp_gpu_memory_hint">Experimental DXVK DXGI reported GPU memory in MB. Default, unset and 0 preserve the driver report. Only an explicit valid value changes it. Patched Proton also caps budgets, including the normal D3D12 + VKD3D-Proton path. Only games using these values may benefit; this is not a RAM limit.</string>
 +    <string name="jp_allocator_hint">Low Memory Mode: use glibc top_pad=1MB, arena_max=2, trim_threshold=128KB. Shared profile applies to Steam, gamescope and Xwayland at next session; game profile applies at next launch. Set 0 to compare without allocator changes. Turning Low Memory Mode off restores the previous tunables on restart. Performance may vary.</string>

@@ -239,7 +239,14 @@ def install_optional_graphics(tree, targets, candidates):
         '                and os.environ.get("DROIDDECK_SESSION_LOW_MEMORY", os.environ.get("DROIDDECK_LOW_MEMORY", "0")) == "1"\n'
         '                and d in ("wine/dxvk", "wine/vkd3d-proton")):\n'
         '            d = "wine/droiddeck-low-memory/" + d.split("/")[-1]\n')
+    ram_anchor = '            self.env.setdefault("FEX_DISKCACHE", "1")\n'
+    if source.count(ram_anchor) != 1:
+        raise ValueError("original Proton FEX startup changed")
+    source = source.replace(ram_anchor, ram_anchor +
+        '            from droiddeck_ram import configure_ram\n'
+        '            configure_ram(self.env)\n')
     write_preserving_mode(proton, source.encode())
+    shutil.copy2(ROOT / "droiddeck_ram.py", tree / "droiddeck_ram.py")
     return candidates
 
 
@@ -322,6 +329,7 @@ def package(task, manager, lock_path=None):
     if not sdk_digests:
         raise ValueError("SDK image digest is missing")
     metadata = dict(lock, manager_commit=manager, sdk_digests=sdk_digests,
+                    ram_policy=json.loads((task / "results/ram-source-audit.json").read_text()),
                     dll_profile="patched", replaced_dlls=["ntdll", "dxgi", "vkd3d"],
                     features=["ntcontext-null-fix", "dxvk-dxgi-memory-budget-cap", "vkd3d-low-memory-pools"],
                     patches=["ntgetcontext-null.patch", "dxvk-memory-budget.patch", "vkd3d-low-memory.patch"],
@@ -351,7 +359,7 @@ def package(task, manager, lock_path=None):
     # Include exact patches, build inputs and source locations with the binary.
     source_info = tree / "droiddeck-source"
     source_info.mkdir()
-    for name in ("build.lock.json", "apply.py", "build.sh", "build-inside.sh", "build-dxvk.sh", "build_config.py", "prepare_upstream.py", "runtime_smoke.py", "stock_ntdll.py", "runtime-probe.c", "dxvk-arm64ec.cross", "package.py",
+    for name in ("build.lock.json", "apply.py", "build.sh", "build-inside.sh", "build-dxvk.sh", "build_config.py", "prepare_upstream.py", "runtime_smoke.py", "stock_ntdll.py", "droiddeck_ram.py", "runtime-probe.c", "dxvk-arm64ec.cross", "package.py",
                  "ntgetcontext-null.patch", "dxvk-memory-budget.patch"):
         shutil.copy2(lock_path if name == "build.lock.json" and lock_path else ROOT / name, source_info / name)
     shutil.copytree(VKD3D_ROOT, source_info / "vkd3d-low-memory", ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))

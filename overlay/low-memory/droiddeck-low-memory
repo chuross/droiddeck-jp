@@ -111,7 +111,7 @@ def game_environment(env):
                 (Path(base) / "agent/steam-memory-request").touch()
             except OSError:
                 pass  # The agent is optional; a failed request never blocks Proton.
-    print("low-memory: game overlay/HUD off, FEX dynamic L1 on/L2 off", file=sys.stderr)
+    print("low-memory: game overlay/HUD off; custom Proton controls FEX lookup RAM retention", file=sys.stderr)
     print("low-memory: VKD3D pool reclaim requested=" + result["DROIDDECK_VKD3D_LOW_MEMORY"]
           + " (requires patched Proton)", file=sys.stderr)
     return result
