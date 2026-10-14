@@ -17,6 +17,9 @@ git -C "$task_root/proton" submodule update --init --recursive --depth=1 wine dx
 test "$(git -C "$task_root/proton/wine" rev-parse HEAD)" = "$(read_lock wine_commit)"
 test "$(git -C "$task_root/proton/dxvk" rev-parse HEAD)" = "$(read_lock dxvk_commit)"
 test "$(git -C "$task_root/proton/vkd3d-proton" rev-parse HEAD)" = "$(read_lock vkd3d_commit)"
+mkdir -p "$task_root/results"
+python3 "$manager_root/overlay/proton-ntcontext/prepare_upstream.py" "$task_root/proton" \
+    --output "$task_root/results/upstream-patches.json"
 python3 "$manager_root/overlay/vkd3d-low-memory/apply.py" "$task_root/proton/vkd3d-proton" --check
 python3 "$manager_root/overlay/proton-ntcontext/apply.py" --wine-source "$task_root/proton/wine" --dxvk-source "$task_root/proton/dxvk"
 python3 "$manager_root/overlay/vkd3d-low-memory/apply.py" "$task_root/proton/vkd3d-proton"

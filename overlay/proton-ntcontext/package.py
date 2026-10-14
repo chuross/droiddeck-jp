@@ -12,6 +12,7 @@ import tarfile
 
 ROOT = Path(__file__).resolve().parent
 VKD3D_ROOT = ROOT.parent / "vkd3d-low-memory"
+verify_upstream = runpy.run_path(str(ROOT / "prepare_upstream.py"))["verify"]
 
 
 def sha256(path):
@@ -234,6 +235,9 @@ def package(task, manager, lock_path=None):
     header = task / "proton/vkd3d-proton/libs/vkd3d/droiddeck_memory.h"
     if header.read_bytes() != (VKD3D_ROOT / "droiddeck_memory.h").read_bytes():
         raise ValueError("VKD3D low-memory policy differs from checked source")
+    upstream = verify_upstream(task / "proton", task / "results/upstream-patches.json",
+                               {"dxvk": ROOT / "dxvk-memory-budget.patch",
+                                "vkd3d-proton": VKD3D_ROOT / "vkd3d-low-memory.patch"})
     archive = task / "base.tar.gz"
     if sha256(archive) != lock["base_sha256"]:
         raise ValueError("base archive checksum mismatch")
@@ -286,6 +290,7 @@ def package(task, manager, lock_path=None):
                     features=["ntcontext-null-fix", "dxvk-dxgi-memory-budget-cap", "vkd3d-low-memory-pools"],
                     patches=["ntgetcontext-null.patch", "dxvk-memory-budget.patch", "vkd3d-low-memory.patch"],
                     runtime_verification=smoke,
+                    upstream_graphics_patches=upstream,
                     candidate_ntdll_sha256=sha256(rebuilt),
                     candidate_dxvk_dxgi_sha256=sha256(rebuilt_graphics),
                     candidate_vkd3d_core_sha256=sha256(rebuilt_d3d12),
@@ -307,7 +312,7 @@ def package(task, manager, lock_path=None):
     # Include exact patches, build inputs and source locations with the binary.
     source_info = tree / "droiddeck-source"
     source_info.mkdir()
-    for name in ("build.lock.json", "apply.py", "build.sh", "build-inside.sh", "build-dxvk.sh", "build_config.py", "runtime_smoke.py", "runtime-probe.c", "dxvk-arm64ec.cross", "package.py",
+    for name in ("build.lock.json", "apply.py", "build.sh", "build-inside.sh", "build-dxvk.sh", "build_config.py", "prepare_upstream.py", "runtime_smoke.py", "runtime-probe.c", "dxvk-arm64ec.cross", "package.py",
                  "ntgetcontext-null.patch", "dxvk-memory-budget.patch"):
         shutil.copy2(lock_path if name == "build.lock.json" and lock_path else ROOT / name, source_info / name)
     shutil.copytree(VKD3D_ROOT, source_info / "vkd3d-low-memory", ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))

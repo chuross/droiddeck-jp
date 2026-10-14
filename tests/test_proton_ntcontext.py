@@ -433,6 +433,7 @@ class DroidDeckPackageTest(unittest.TestCase):
     def invoke(self):
         actual_run = subprocess.run
         with patch.object(package.subprocess, "check_output", side_effect=self.heads), \
+                patch.object(package, "verify_upstream", return_value={"patches": [], "prepared_files": {}}), \
                 patch.object(package.subprocess, "run", wraps=subprocess.run) as run:
             def execute(args, **kwargs):
                 if "apply" in args:
@@ -676,6 +677,8 @@ class DroidDeckReleaseTest(unittest.TestCase):
                  original_ntdll_sha256="a" * 64, rebuilt_ntdll_sha256="d" * 64,
                  original_dxvk_dxgi_sha256="b" * 64, rebuilt_dxvk_dxgi_sha256="e" * 64,
                  original_vkd3d_core_sha256="c" * 64, rebuilt_vkd3d_core_sha256="f" * 64,
+                 upstream_graphics_patches={"patches": [{"component": "dxvk"}, {"component": "vkd3d-proton"}],
+                     "prepared_files": {"dxvk/state.c": "a" * 64, "vkd3d-proton/state.c": "b" * 64}},
                  runtime_verification={"stock": "passed", "patched": "passed",
                      "original_sha256": {"ntdll": "a" * 64, "dxgi": "b" * 64, "vkd3d": "c" * 64},
                      "dll_sha256": {"ntdll": "d" * 64, "dxgi": "e" * 64, "vkd3d": "f" * 64}})))
@@ -688,7 +691,7 @@ class DroidDeckReleaseTest(unittest.TestCase):
         for change in ({"dll_profile": "stock"}, {"replaced_dlls": ["ntdll"]},
                        {"features": ["ntcontext-null-fix"]},
                        {"rebuilt_ntdll_sha256": "0" * 64}, {"runtime_verification": {}},
-                       {"original_dxvk_dxgi_sha256": ""}):
+                       {"original_dxvk_dxgi_sha256": ""}, {"upstream_graphics_patches": {}}):
             with self.subTest(change=change), tempfile.TemporaryDirectory() as temporary:
                 directory = Path(temporary)
                 self.prepare_assets(directory, plan)

@@ -5,7 +5,7 @@
 - [Protonファイル導入](overlay/proton-import/): ファイル選択でARM64版Protonを追加・削除。
 - [Low Memoryモード](overlay/low-memory/): DXGI Budget制限・Steam未使用メモリ回収・Decky停止。
 
-- [ARM64 Proton修正](overlay/proton-ntcontext/): 元版のPEビルド条件でNULL修正とDXGI Budget capを適用。
+- [ARM64 Proton修正](overlay/proton-ntcontext/): 本家の互換パッチとPEビルド条件を維持して独自修正を適用。
 - [VKD3D省メモリ](overlay/vkd3d-low-memory/): Low Memory時の未使用バッファ・描画プール保持を削減。
 - [ログ共有](overlay/log-share/): 実ログを変更せず省メモリの共有snapshotを作成。
 

@@ -213,6 +213,10 @@ def publish(repository, manager, plan, directory):
             or manifest.get("features") != ["ntcontext-null-fix", "dxvk-dxgi-memory-budget-cap", "vkd3d-low-memory-pools"]):
         raise RuntimeError("Expected the verified patched Proton build")
     smoke = manifest.get("runtime_verification", {})
+    upstream = manifest.get("upstream_graphics_patches", {})
+    if ({item.get("component") for item in upstream.get("patches", [])} != {"dxvk", "vkd3d-proton"}
+            or not upstream.get("prepared_files")):
+        raise RuntimeError("Original Proton graphics compatibility patches must be preserved")
     if smoke.get("stock") != "passed" or smoke.get("patched") != "passed":
         raise RuntimeError("Stock/patched DLL runtime checks must pass before publication")
     for name, original, installed in (("ntdll", "original_ntdll_sha256", "rebuilt_ntdll_sha256"),
