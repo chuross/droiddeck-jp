@@ -15,6 +15,7 @@ class OriginalDllGuardTest(unittest.TestCase):
         data = bytearray(2162688)
         struct.pack_into("<I", data, RECIPE["CODEMAP_LENGTH_OFFSET"], 0x6e374)
         struct.pack_into("<II", data, RECIPE["REDIRECTION_OFFSET"] - 4, 0xf42e0, RECIPE["ORIGINAL_ENTRY"])
+        struct.pack_into("<Q", data, RECIPE["SYSCALL_POINTER_OFFSET"], 0x180000000 + RECIPE["ORIGINAL_ENTRY"])
         data[RECIPE["ORIGINAL_ENTRY"]:RECIPE["ORIGINAL_ENTRY"] + 4] = bytes.fromhex("f353bda9")
         return bytes(data)
 
@@ -26,7 +27,9 @@ class OriginalDllGuardTest(unittest.TestCase):
             permitted = {i for start, length in report["changed_ranges"] for i in range(start, start + length)}
             self.assertEqual(len(candidate), len(original))
             self.assertTrue(all(i in permitted for i, (a, b) in enumerate(zip(original, candidate)) if a != b))
-            self.assertEqual(len(permitted), 24)
+            self.assertEqual(len(permitted), 32)
+            self.assertEqual(struct.unpack_from("<Q", candidate, RECIPE["SYSCALL_POINTER_OFFSET"])[0],
+                             0x180000000 + RECIPE["GUARD_RVA"])
             guard = struct.unpack_from("<4I", candidate, RECIPE["GUARD_RVA"])
             self.assertEqual(guard[0] & 0xff00001f, 0xb5000001)  # cbnz x1
             displacement = (guard[0] >> 5) & 0x7ffff
@@ -56,4 +59,4 @@ class OriginalDllGuardTest(unittest.TestCase):
         original = Path(os.environ["DROIDDECK_STOCK_NTDLL"]).read_bytes()
         candidate = RECIPE["patch"](original)
         self.assertEqual(RECIPE["verify"](original, candidate)["patched_sha256"],
-                         "a9392acd7606c46023a547d879d16c271e0d8feb75381c6f6bf7da6f9505125a")
+                         "12fba0d81f743b76a747b04bd3ad59005eed50ccfd997bff6482a64be370e86e")
