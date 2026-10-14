@@ -41,16 +41,8 @@ int main(void) {
     assert(droiddeck_scratch_limit(false, true, 128) == 128);
     assert(droiddeck_scratch_limit(true, false, 32) == 4);
     assert(droiddeck_scratch_limit(true, true, 128) == 8);
-    assert(droiddeck_command_pool_limit(false, 8) == 8);
-    assert(droiddeck_command_pool_limit(true, 8) == 1);
-    assert(droiddeck_command_buffer_limit(false) == 256);
-    assert(droiddeck_command_buffer_limit(true) == 64);
-    uint32_t resets = 0;
-    for (int i = 0; i < 180; i++) assert(!droiddeck_release_pool_memory(false, &resets));
-    assert(resets == 0);
-    for (int i = 1; i <= 180; i++)
-        assert(droiddeck_release_pool_memory(true, &resets) == (i % 60 == 0));
-    assert(resets == 0);
+    assert(droiddeck_scratch_limit(true, false, 2) == 2);
+    assert(droiddeck_scratch_limit(true, true, 2) == 2);
 }
 ''')
 
@@ -181,7 +173,7 @@ int main(void) {
 '''
         self.compile(code)
 
-    def test_actual_command_reset_reclaims_periodically_and_keeps_error_propagation(self):
+    def test_actual_command_reset_reuses_buffers_without_periodic_driver_release(self):
         text = (Path(os.environ["DROIDDECK_VKD3D_SOURCE"]) / "libs/vkd3d/command.c").read_text()
         actual = function(text, "d3d12_command_allocator_reset_command_pool")
         code = r'''
@@ -238,15 +230,15 @@ int main(void) {
     pool.pending.command_buffers_size = 300;
     pool.pending.command_buffer_count = 300;
     assert(d3d12_command_allocator_reset_command_pool(&device, &pool) == S_OK);
-    assert(freed == 236 && pool.recycled.command_buffer_count == 64 && !pool.pending.command_buffer_count);
+    assert(freed == 44 && pool.recycled.command_buffer_count == 256 && !pool.pending.command_buffer_count);
     for (int i = 1; i < 60; i++)
         assert(d3d12_command_allocator_reset_command_pool(&device, &pool) == S_OK);
-    assert(calls == 60 && release_calls == 1 && reset_flags == 1 && pool.droiddeck_reset_count == 0);
+    assert(calls == 60 && release_calls == 0 && reset_flags == 0);
     device.droiddeck_low_memory = false;
     pool.pending.command_buffer_count = 300;
     freed = 0;
     assert(d3d12_command_allocator_reset_command_pool(&device, &pool) == S_OK);
-    assert(freed == 108 && pool.recycled.command_buffer_count == 256 && reset_flags == 0);
+    assert(freed == 300 && pool.recycled.command_buffer_count == 256 && reset_flags == 0);
     reset_result = -5;
     assert(d3d12_command_allocator_reset_command_pool(&device, &pool) == -105);
     free(pool.pending.command_buffers); free(pool.recycled.command_buffers);
@@ -309,3 +301,4 @@ int main(void) {
 
 if __name__ == "__main__":
     unittest.main()
+

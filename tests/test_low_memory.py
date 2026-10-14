@@ -53,7 +53,7 @@ class LowMemoryTest(unittest.TestCase):
         self.assertEqual(result["DXVK_HUD"], "0")
         self.assertEqual(original["MANGOHUD"], "1")
 
-    def test_gpu_default_zero_and_invalid_values_use_2048(self):
+    def test_gpu_default_zero_and_invalid_values_preserve_driver_budget(self):
         for value in (None, "0", "", "-1", "255", "16385", "999999", "oops",
                       "$(touch /tmp/no)", "100;bad"):
             with self.subTest(value=value):
@@ -61,8 +61,7 @@ class LowMemoryTest(unittest.TestCase):
                 if value is not None:
                     env[LOW["GPU"]] = value
                 result = LOW["game_environment"](env)
-                self.assertEqual(result["DXVK_CONFIG"],
-                                 "dxgi.maxDeviceMemory = 2048; dxgi.maxSharedMemory = 2048")
+                self.assertNotIn("DXVK_CONFIG", result)
                 self.assertNotIn("VKD3D_VRAM_SIZE", result)
                 self.assertNotIn("DXVK_CONFIG", env)
 
@@ -75,9 +74,11 @@ class LowMemoryTest(unittest.TestCase):
                     if value is not None:
                         env[LOW["GPU"]] = value
                     result = LOW["game_environment"](env)
-                    budget = value if value in ("1024", "2048", "3072", "256", "16384") else "2048"
-                    self.assertEqual(result["DXVK_CONFIG"], config.rstrip(";") +
-                                     "; dxgi.maxDeviceMemory = " + budget + "; dxgi.maxSharedMemory = " + budget)
+                    if value in ("1024", "2048", "3072", "256", "16384"):
+                        self.assertEqual(result["DXVK_CONFIG"], config.rstrip(";") +
+                                         "; dxgi.maxDeviceMemory = " + value + "; dxgi.maxSharedMemory = " + value)
+                    else:
+                        self.assertEqual(result["DXVK_CONFIG"], config)
                     self.assertEqual(result.get(LOW["GPU"]), value)
                     self.assertNotIn("dxgi=b", result["WINEDLLOVERRIDES"])
                     off = dict(env, DROIDDECK_LOW_MEMORY="0")
@@ -138,7 +139,7 @@ class LowMemoryTest(unittest.TestCase):
                 self.assertFalse(request.exists())
             agent.rmdir()
             # The missing/failed agent must not prevent starting a game.
-            self.assertIn("DXVK_CONFIG", LOW["game_environment"](env))
+            self.assertEqual(LOW["game_environment"](env)["DXVK_HUD"], "0")
 
     def test_session_snapshot_ignores_per_game_mode_and_live_shared_changes(self):
         on = LOW["game_environment"]({LOW["SESSION"]: "1", LOW["MODE"]: "0"})
@@ -342,3 +343,4 @@ class MemoryProfilerTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+

@@ -96,14 +96,12 @@ def game_environment(env):
     # ARM64 Proton also uses DXVK DXGI for D3D12/VKD3D-Proton. The patched DXVK
     # applies these same options to QueryVideoMemoryInfo budgets.
     budget = result.get(GPU, "0")
-    if not (isinstance(budget, str) and re.fullmatch(r"[0-9]{1,5}", budget)
-            and 256 <= int(budget) <= 16384):
-        if budget != "0":
-            print("low-memory: invalid GPU memory report; using 2048 MB (valid: 256..16384 MB)", file=sys.stderr)
-        budget = "2048"
-    own = result.get("DXVK_CONFIG", "").strip().rstrip(";")
-    options = "dxgi.maxDeviceMemory = %s; dxgi.maxSharedMemory = %s" % (budget, budget)
-    result["DXVK_CONFIG"] = (own + "; " if own else "") + options
+    if isinstance(budget, str) and re.fullmatch(r"[0-9]{1,5}", budget) and 256 <= int(budget) <= 16384:
+        own = result.get("DXVK_CONFIG", "").strip().rstrip(";")
+        options = "dxgi.maxDeviceMemory = %s; dxgi.maxSharedMemory = %s" % (budget, budget)
+        result["DXVK_CONFIG"] = (own + "; " if own else "") + options
+    elif budget not in (None, "0", ""):
+        print("low-memory: invalid GPU memory report; preserving the driver budget", file=sys.stderr)
     # Ask the existing agent to reclaim CEF caches while the game is loading,
     # before its window has appeared. No extra resident process is started.
     if enabled(result.get(SESSION_TRIM, "0")):
@@ -145,3 +143,4 @@ def main():
 
 if __name__ == "__main__":
     sys.exit(main())
+
