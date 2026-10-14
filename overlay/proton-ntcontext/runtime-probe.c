@@ -14,6 +14,7 @@ int main(int argc, char **argv)
     HANDLE thread;
     CONTEXT context;
     LONG status;
+    HMODULE modules[2];
     int i;
     if (argc != 4) return 1;
     get_context = (get_context_fn)(void *)GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "NtGetContextThread");
@@ -37,8 +38,9 @@ int main(int argc, char **argv)
         module = LoadLibraryW(path);
         if (!module) { printf("load failed: %s error=%lu\n", argv[i + 2], GetLastError()); return 7; }
         if (!GetProcAddress(module, exports[i])) return 8;
-        FreeLibrary(module);
+        modules[i] = module;
     }
+    for (i = 1; i >= 0; --i) FreeLibrary(modules[i]);
     printf("DROIDDECK_RUNTIME_OK %s\n", argv[1]);
     return 0;
 }

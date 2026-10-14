@@ -3,6 +3,7 @@ import argparse
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 
 from package import (base_tree, original_ntdll, original_dxvk, original_vkd3d,
@@ -22,7 +23,7 @@ def run_probe(task, tree, probe, targets, phase):
     config = task / "results/fex-smoke-config.json"
     config.write_text('{"Config": {}}\n')
     library_paths = [str(lib / arch) for arch in ("aarch64-linux-gnu", "x86_64-linux-gnu", "i386-linux-gnu")]
-    env = dict(os.environ, WINEPREFIX=str(prefix), WINEDEBUG="-all,+loaddll",
+    env = dict(os.environ, WINEPREFIX=str(prefix), WINEDEBUG="err+all,+loaddll",
                WINESERVER=str(binary / "wineserver"),
                WINEDLLPATH=str(lib / "vkd3d") + ":" + str(lib / "wine"),
                # Proton normally installs native graphics DLLs into system32.
@@ -36,6 +37,15 @@ def run_probe(task, tree, probe, targets, phase):
     log = task / ("results/runtime-" + phase + ".log")
     try:
         with log.open("w") as output:
+            # Mirror Proton's native graphics installation after Wine creates
+            # the prefix. WINEPATH alone does not reproduce system DLL lookup.
+            subprocess.run([str(binary / "wine"), "wineboot.exe", "-u"], env=env,
+                           stdout=output, stderr=subprocess.STDOUT, timeout=120, check=True)
+            system32 = prefix / "drive_c/windows/system32"
+            for name in ("dxgi", "vkd3d"):
+                installed = system32 / targets[name].name
+                installed.unlink(missing_ok=True)
+                shutil.copyfile(targets[name], installed)
             result = subprocess.run([str(binary / "wine"), str(probe), phase,
                                      windows_path(targets["dxgi"]), windows_path(targets["vkd3d"])],
                                     env=env, stdout=output, stderr=subprocess.STDOUT, timeout=120)
