@@ -6,8 +6,10 @@ source="$task_root/proton/vkd3d-proton"
 mkdir -p "$task_root/results/vkd3d"
 # build-dxvk.sh already built the exact pinned host glslang compiler.
 export PATH="$task_root/glslang-build/StandAlone:$PATH"
+python3 "$manager_root/overlay/proton-ntcontext/build_config.py" "$task_root/proton" \
+    --cross vkd3d --output "$task_root/results/vkd3d/cross.txt"
 meson setup "$task_root/vkd3d-build" "$source" \
-    --cross-file="$manager_root/overlay/proton-ntcontext/dxvk-arm64ec.cross" \
+    --cross-file="$task_root/results/vkd3d/cross.txt" \
     --buildtype=plain --prefix="$task_root/vkd3d-install" \
     --bindir=lib/wine/vkd3d-proton/aarch64-windows \
     -Db_ndebug=true -Denable_extended_emulation=true \
@@ -22,3 +24,4 @@ llvm-readobj --file-headers --coff-exports --coff-load-config \
 cp "$task_root/vkd3d-build/compile_commands.json" "$task_root/results/vkd3d/"
 python3 -c 'import runpy,sys; from pathlib import Path; m=runpy.run_path(sys.argv[1]); print("VKD3D PE:", m["vkd3d_interface"](Path(sys.argv[2])))' \
     "$manager_root/overlay/proton-ntcontext/package.py" "$task_root/results/vkd3d/d3d12core.dll"
+

@@ -16,8 +16,10 @@ export PATH="$task_root/glslang-build/StandAlone:$PATH"
 version="$(git -C "$source" describe --always --abbrev=15 --dirty=0)"
 sed "s/@VCS_TAG@/$version/" "$source/version.h.in" > "$source/version.h.in.tmp"
 mv "$source/version.h.in.tmp" "$source/version.h.in"
+python3 "$manager_root/overlay/proton-ntcontext/build_config.py" "$task_root/proton" \
+    --cross dxvk --output "$task_root/results/dxvk/cross.txt"
 meson setup "$task_root/dxvk-build" "$source" \
-    --cross-file="$manager_root/overlay/proton-ntcontext/dxvk-arm64ec.cross" \
+    --cross-file="$task_root/results/dxvk/cross.txt" \
     --buildtype=plain --prefix="$task_root/dxvk-install" \
     --bindir=lib/wine/dxvk/aarch64-windows \
     -Denable_dxgi=true -Denable_d3d8=false -Denable_d3d9=false \
@@ -32,4 +34,5 @@ git -C "$source" diff --binary > "$task_root/results/dxvk/patches.diff"
 cp "$task_root/dxvk-build/compile_commands.json" "$task_root/results/dxvk/"
 python3 -c 'import runpy,sys; from pathlib import Path; m=runpy.run_path(sys.argv[1]); print("DXVK PE:", m["dxvk_interface"](Path(sys.argv[2])))' \
     "$manager_root/overlay/proton-ntcontext/package.py" "$task_root/results/dxvk/dxgi.dll"
+
 

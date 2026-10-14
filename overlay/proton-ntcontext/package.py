@@ -1,4 +1,4 @@
-"""Package the upstream runtime without replacing its known-working DLLs."""
+"""Apply rebuilt DLLs only after matching the stock imports and runtime checks."""
 import argparse
 import hashlib
 import json
@@ -65,8 +65,40 @@ def pe_interface(path):
     config_rva, config_size = struct.unpack_from("<II", data, optional + 112 + 10 * 8)
     metadata = (struct.unpack_from("<Q", data, offset(config_rva, 208) + 200)[0]
                 if config_size >= 208 else 0)
+    imports = {}
+    for index, descriptor_size, name_index, thunk_index in ((1, 20, 3, 0), (13, 32, 1, 4)):
+        rva, size = struct.unpack_from("<II", data, optional + 112 + index * 8)
+        if not rva:
+            continue
+        for entry in range(min(size // descriptor_size + 1, 10000)):
+            fields = struct.unpack_from("<" + "I" * (descriptor_size // 4), data,
+                                        offset(rva + entry * descriptor_size, descriptor_size))
+            if not any(fields):
+                break
+            if index == 13 and fields[0] != 1:
+                raise ValueError("expected RVA-based delay imports")
+            name_offset = offset(fields[name_index])
+            module = data[name_offset:data.index(b"\0", name_offset)].decode("ascii").lower()
+            thunk = fields[thunk_index]
+            if not thunk and index == 1:
+                thunk = fields[4]
+            symbols = []
+            for item in range(10000):
+                value = struct.unpack_from("<Q", data, offset(thunk + 8 * item, 8))[0]
+                if not value:
+                    break
+                if value & (1 << 63):
+                    symbols.append("#" + str(value & 0xffff))
+                else:
+                    start = offset(value, 3) + 2
+                    symbols.append(data[start:data.index(b"\0", start)].decode("ascii"))
+            else:
+                raise ValueError("unterminated import thunks")
+            imports[str(index) + ":" + module] = sorted(symbols)
+        else:
+            raise ValueError("unterminated import descriptors")
     return {"machine": machine, "exports": exports, "export_base": base,
-            "function_count": function_count, "arm64x_metadata": bool(metadata)}
+            "function_count": function_count, "arm64x_metadata": bool(metadata), "imports": imports}
 
 
 def check_disassembly(text):
@@ -233,9 +265,15 @@ def package(task, manager, lock_path=None):
     if (original_ntdll_hash == sha256(rebuilt) or original_dxvk_hash == sha256(rebuilt_graphics)
             or original_vkd3d_hash == sha256(rebuilt_d3d12)):
         raise ValueError("rebuilt DLL is unchanged")
-    # Low Memory off does not undo DLL replacement. Export/architecture checks
-    # alone cannot establish runtime compatibility, so retain upstream DLLs.
-    # Rebuilt binaries remain build evidence only, never shipped as runtime DLLs.
+    smoke = json.loads((task / "results/runtime-smoke.json").read_text())
+    hashes = {"ntdll": sha256(rebuilt), "dxgi": sha256(rebuilt_graphics), "vkd3d": sha256(rebuilt_d3d12)}
+    if (smoke.get("stock") != "passed" or smoke.get("patched") != "passed"
+            or smoke.get("dll_sha256") != hashes or smoke.get("original_sha256") != {
+                "ntdll": original_ntdll_hash, "dxgi": original_dxvk_hash, "vkd3d": original_vkd3d_hash}):
+        raise ValueError("stock/patched DLL runtime verification is missing or stale")
+    write_preserving_mode(ntdll, rebuilt.read_bytes())
+    write_preserving_mode(dxvk, rebuilt_graphics.read_bytes())
+    write_preserving_mode(vkd3d, rebuilt_d3d12.read_bytes())
     template = (task / "proton/compatibilitytool.vdf.template").read_text()
     if "##BUILD_NAME##" not in template or "##INTERNAL_TOOL_NAME##" not in template:
         raise ValueError("upstream compatibility template changed")
@@ -244,7 +282,10 @@ def package(task, manager, lock_path=None):
     if not sdk_digests:
         raise ValueError("SDK image digest is missing")
     metadata = dict(lock, manager_commit=manager, sdk_digests=sdk_digests,
-                    dll_profile="stock", replaced_dlls=[], features=[], patches=[],
+                    dll_profile="patched", replaced_dlls=["ntdll", "dxgi", "vkd3d"],
+                    features=["ntcontext-null-fix", "dxvk-dxgi-memory-budget-cap", "vkd3d-low-memory-pools"],
+                    patches=["ntgetcontext-null.patch", "dxvk-memory-budget.patch", "vkd3d-low-memory.patch"],
+                    runtime_verification=smoke,
                     candidate_ntdll_sha256=sha256(rebuilt),
                     candidate_dxvk_dxgi_sha256=sha256(rebuilt_graphics),
                     candidate_vkd3d_core_sha256=sha256(rebuilt_d3d12),
@@ -257,7 +298,7 @@ def package(task, manager, lock_path=None):
                     rebuilt_vkd3d_core_sha256=sha256(vkd3d),
                     vkd3d_core_architecture="ARM64X",
                     vkd3d_core_archive_path=str(vkd3d.relative_to(tree)),
-                    fix="stock DLLs preserved for startup compatibility")
+                    fix="ARM64EC NtGetContextThread(NULL) returns STATUS_INVALID_PARAMETER")
     (tree / "droiddeck-ntcontext-build.json").write_text(json.dumps(metadata, indent=2) + "\n")
     dist = task / "dist"
     dist.mkdir(exist_ok=True)
@@ -266,7 +307,7 @@ def package(task, manager, lock_path=None):
     # Include exact patches, build inputs and source locations with the binary.
     source_info = tree / "droiddeck-source"
     source_info.mkdir()
-    for name in ("build.lock.json", "apply.py", "build.sh", "build-inside.sh", "build-dxvk.sh", "dxvk-arm64ec.cross", "package.py",
+    for name in ("build.lock.json", "apply.py", "build.sh", "build-inside.sh", "build-dxvk.sh", "build_config.py", "runtime_smoke.py", "runtime-probe.c", "dxvk-arm64ec.cross", "package.py",
                  "ntgetcontext-null.patch", "dxvk-memory-budget.patch"):
         shutil.copy2(lock_path if name == "build.lock.json" and lock_path else ROOT / name, source_info / name)
     shutil.copytree(VKD3D_ROOT, source_info / "vkd3d-low-memory", ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))

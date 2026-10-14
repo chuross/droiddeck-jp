@@ -209,14 +209,20 @@ def publish(repository, manager, plan, directory):
     manifest = json.loads((directory / "proton-build.json").read_text())
     if manifest.get("manager_commit") != manager or any(manifest.get(key) != value for key, value in lock.items()):
         raise RuntimeError("Proton build provenance differs from release plan")
-    if (manifest.get("dll_profile") != "stock" or manifest.get("replaced_dlls") != []
-            or manifest.get("features") != [] or manifest.get("patches") != []):
-        raise RuntimeError("Only stock-DLL recovery builds may be published")
-    for original, installed in (("original_ntdll_sha256", "rebuilt_ntdll_sha256"),
-                                ("original_dxvk_dxgi_sha256", "rebuilt_dxvk_dxgi_sha256"),
-                                ("original_vkd3d_core_sha256", "rebuilt_vkd3d_core_sha256")):
-        if not re.fullmatch(r"[0-9a-f]{64}", manifest.get(original, "")) or manifest[original] != manifest.get(installed):
-            raise RuntimeError("Public Proton must preserve stock DLL hashes")
+    if (manifest.get("dll_profile") != "patched" or manifest.get("replaced_dlls") != ["ntdll", "dxgi", "vkd3d"]
+            or manifest.get("features") != ["ntcontext-null-fix", "dxvk-dxgi-memory-budget-cap", "vkd3d-low-memory-pools"]):
+        raise RuntimeError("Expected the verified patched Proton build")
+    smoke = manifest.get("runtime_verification", {})
+    if smoke.get("stock") != "passed" or smoke.get("patched") != "passed":
+        raise RuntimeError("Stock/patched DLL runtime checks must pass before publication")
+    for name, original, installed in (("ntdll", "original_ntdll_sha256", "rebuilt_ntdll_sha256"),
+                                      ("dxgi", "original_dxvk_dxgi_sha256", "rebuilt_dxvk_dxgi_sha256"),
+                                      ("vkd3d", "original_vkd3d_core_sha256", "rebuilt_vkd3d_core_sha256")):
+        if (not re.fullmatch(r"[0-9a-f]{64}", manifest.get(original, ""))
+                or smoke.get("original_sha256", {}).get(name) != manifest[original]
+                or smoke.get("dll_sha256", {}).get(name) != manifest.get(installed)
+                or manifest[original] == manifest.get(installed)):
+            raise RuntimeError("DLL runtime evidence does not match the published build")
     expected = {}
     for path in (assets[0], directory / (lock["build_name"] + "-wine-source.tar.xz")):
         with path.open("rb") as archive:

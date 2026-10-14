@@ -353,6 +353,22 @@ def synthetic_pe(export="CreateDXGIFactory", machine=0xaa64, hybrid=True, marker
 
 
 class DroidDeckPackageTest(unittest.TestCase):
+    def test_import_changes_are_part_of_the_stock_dll_interface(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            original = Path(temporary) / "original.dll"
+            changed = Path(temporary) / "changed.dll"
+            data = bytearray(synthetic_pe())
+            struct.pack_into("<II", data, 0x98 + 120, 0x1500, 40)
+            struct.pack_into("<IIIII", data, 0x700, 0x1580, 0, 0, 0x1540, 0x1580)
+            data[0x740:0x740 + 13] = b"KERNEL32.dll\0"
+            struct.pack_into("<QQ", data, 0x780, 0x15c0, 0)
+            data[0x7c0:0x7c0 + 15] = b"\0\0LoadLibraryW\0"
+            original.write_bytes(data)
+            self.assertEqual(package.pe_interface(original)["imports"], {"1:kernel32.dll": ["LoadLibraryW"]})
+            data[0x7c2:0x7c2 + 13] = b"FreeLibrary\0\0"
+            changed.write_bytes(data)
+            self.assertNotEqual(package.pe_interface(original), package.pe_interface(changed))
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
@@ -401,6 +417,14 @@ class DroidDeckPackageTest(unittest.TestCase):
         (results / "vkd3d").mkdir()
         (results / "vkd3d/d3d12core.dll").write_bytes(synthetic_pe(export="D3D12GetInterface",
                                                     marker=b"patched DROIDDECK_VKD3D_LOW_MEMORY"))
+        self.smoke_path = results / "runtime-smoke.json"
+        self.smoke_path.write_text(json.dumps({"stock": "passed", "patched": "passed",
+            "original_sha256": {"ntdll": package.sha256(package.original_ntdll(self.tree)),
+                                "dxgi": package.sha256(package.original_dxvk(self.tree)),
+                                "vkd3d": package.sha256(package.original_vkd3d(self.tree))},
+            "dll_sha256": {"ntdll": package.sha256(results / "ntdll.dll"),
+                           "dxgi": package.sha256(results / "dxvk/dxgi.dll"),
+                           "vkd3d": package.sha256(results / "vkd3d/d3d12core.dll")}}))
         subprocess.run(["tar", "-czf", str(self.task / "base.tar.gz"), "-C", str(self.task / "base"), self.lock["base_directory"]], check=True)
         self.lock["base_sha256"] = package.sha256(self.task / "base.tar.gz")
         self.lock_path.write_text(json.dumps(self.lock))
@@ -417,7 +441,7 @@ class DroidDeckPackageTest(unittest.TestCase):
             run.side_effect = execute
             package.package(self.task, "manager", self.lock_path)
 
-    def test_public_build_preserves_stock_dlls_and_import_layout(self):
+    def test_verified_dlls_are_replaced_and_import_layout_is_preserved(self):
         importer = __import__("runpy").run_path(str(ROOT.parent / "proton-import/droiddeck-proton-import"))
         with self.assertRaises(importer["ImportProblem"]) as failure:
             importer["validate"](self.tree)
@@ -428,16 +452,16 @@ class DroidDeckPackageTest(unittest.TestCase):
         self.assertEqual(metadata["proton_commit"], self.lock["proton_commit"])
         self.assertEqual(metadata["dxvk_dxgi_architecture"], "ARM64X")
         self.assertEqual(metadata["vkd3d_core_architecture"], "ARM64X")
-        self.assertEqual(metadata["dll_profile"], "stock")
-        self.assertEqual(metadata["features"], [])
-        self.assertEqual(metadata["patches"], [])
-        self.assertEqual(metadata["replaced_dlls"], [])
+        self.assertEqual(metadata["dll_profile"], "patched")
+        self.assertIn("ntcontext-null-fix", metadata["features"])
+        self.assertIn("vkd3d-low-memory-pools", metadata["features"])
+        self.assertEqual(metadata["replaced_dlls"], ["ntdll", "dxgi", "vkd3d"])
         for original, installed in (("original_ntdll_sha256", "rebuilt_ntdll_sha256"),
                                     ("original_dxvk_dxgi_sha256", "rebuilt_dxvk_dxgi_sha256"),
                                     ("original_vkd3d_core_sha256", "rebuilt_vkd3d_core_sha256")):
-            self.assertEqual(metadata[original], metadata[installed])
+            self.assertNotEqual(metadata[original], metadata[installed])
         for locate in (package.original_ntdll, package.original_dxvk, package.original_vkd3d):
-            self.assertEqual(locate(packaged).read_bytes(), locate(self.tree).read_bytes())
+            self.assertNotEqual(locate(packaged).read_bytes(), locate(self.tree).read_bytes())
         self.assertTrue((packaged / "droiddeck-source/vkd3d-low-memory/droiddeck_memory.h").is_file())
         self.assertTrue((packaged / "droiddeck-source/source.tar.xz").is_file())
         self.assertEqual((packaged / "LICENSE.proton").read_text(), "Valve license")
@@ -449,6 +473,21 @@ class DroidDeckPackageTest(unittest.TestCase):
         self.assertEqual((packaged / "files/bin/wine").read_bytes(),
                          (packaged / "files/bin-arm64/wine").read_bytes())
         importer["validate"](packaged)
+
+    def test_failed_or_stale_runtime_checks_leave_all_stock_dlls_unchanged(self):
+        original = json.loads(self.smoke_path.read_text())
+        for changed in (dict(original, stock="failed"), dict(original, patched="failed"),
+                        dict(original, dll_sha256={}), dict(original, original_sha256={})):
+            with self.subTest(report=changed):
+                unpacked = self.task / "unpacked"
+                if unpacked.exists():
+                    shutil.rmtree(unpacked)
+                self.smoke_path.write_text(json.dumps(changed))
+                with self.assertRaisesRegex(ValueError, "runtime verification"):
+                    self.invoke()
+                stock = unpacked / self.lock["base_directory"]
+                for locate in (package.original_ntdll, package.original_dxvk, package.original_vkd3d):
+                    self.assertEqual(locate(stock).read_bytes(), locate(self.tree).read_bytes())
 
     def test_base_checksum_mismatch_prevents_extraction(self):
         self.lock["base_sha256"] = "0" * 64
@@ -630,20 +669,25 @@ class DroidDeckReleaseTest(unittest.TestCase):
         for name in release.asset_names(plan["lock"]) + [plan["lock"]["build_name"] + "-wine-source.tar.xz"]:
             (directory / name).write_text("evidence")
         (directory / "proton-build.json").write_text(json.dumps(
-            dict(plan["lock"], manager_commit="e" * 40, dll_profile="stock",
-                 replaced_dlls=[], features=[], patches=[],
-                 original_ntdll_sha256="a" * 64, rebuilt_ntdll_sha256="a" * 64,
-                 original_dxvk_dxgi_sha256="b" * 64, rebuilt_dxvk_dxgi_sha256="b" * 64,
-                 original_vkd3d_core_sha256="c" * 64, rebuilt_vkd3d_core_sha256="c" * 64)))
+            dict(plan["lock"], manager_commit="e" * 40, dll_profile="patched",
+                 replaced_dlls=["ntdll", "dxgi", "vkd3d"],
+                 features=["ntcontext-null-fix", "dxvk-dxgi-memory-budget-cap", "vkd3d-low-memory-pools"],
+                 patches=["ntgetcontext-null.patch", "dxvk-memory-budget.patch", "vkd3d-low-memory.patch"],
+                 original_ntdll_sha256="a" * 64, rebuilt_ntdll_sha256="d" * 64,
+                 original_dxvk_dxgi_sha256="b" * 64, rebuilt_dxvk_dxgi_sha256="e" * 64,
+                 original_vkd3d_core_sha256="c" * 64, rebuilt_vkd3d_core_sha256="f" * 64,
+                 runtime_verification={"stock": "passed", "patched": "passed",
+                     "original_sha256": {"ntdll": "a" * 64, "dxgi": "b" * 64, "vkd3d": "c" * 64},
+                     "dll_sha256": {"ntdll": "d" * 64, "dxgi": "e" * 64, "vkd3d": "f" * 64}})))
         (directory / "SHA256SUMS").write_text("".join(
             hashlib.sha256((directory / name).read_bytes()).hexdigest() + "  " + name + "\n"
             for name in release.asset_names(plan["lock"]) + [plan["lock"]["build_name"] + "-wine-source.tar.xz"]))
 
-    def test_candidate_profiles_and_changed_stock_hashes_cannot_be_published(self):
+    def test_unverified_or_changed_dlls_cannot_be_published(self):
         plan = self.plan()
-        for change in ({"dll_profile": "all"}, {"replaced_dlls": ["ntdll"]},
+        for change in ({"dll_profile": "stock"}, {"replaced_dlls": ["ntdll"]},
                        {"features": ["ntcontext-null-fix"]},
-                       {"rebuilt_ntdll_sha256": "d" * 64},
+                       {"rebuilt_ntdll_sha256": "0" * 64}, {"runtime_verification": {}},
                        {"original_dxvk_dxgi_sha256": ""}):
             with self.subTest(change=change), tempfile.TemporaryDirectory() as temporary:
                 directory = Path(temporary)

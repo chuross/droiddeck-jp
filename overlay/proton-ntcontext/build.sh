@@ -30,6 +30,7 @@ sdk_image="$(read_lock sdk_image)"
 docker pull "$sdk_image"
 docker image inspect "$sdk_image" --format '{{json .RepoDigests}}' > "$task_root/sdk-digests.json"
 docker run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp -v "$manager_root:$manager_root" -w "$task_root" "$sdk_image" bash "$manager_root/overlay/proton-ntcontext/build-inside.sh" "$task_root" "$manager_root"
+rm -rf "$task_root/runtime-reference" "$task_root/smoke-prefix-stock" "$task_root/smoke-prefix-patched"
 manager_commit="${GITHUB_SHA:-$(git -C "$manager_root" rev-parse HEAD)}"
 mkdir -p "$task_root/dist"
 # Keep all component sources and build inputs in CI, including downloaded contrib sources.
@@ -37,3 +38,4 @@ tar --exclude=.git -cJf "$task_root/dist/$(read_lock build_name)-wine-source.tar
 python3 "$manager_root/overlay/proton-ntcontext/package.py" "$task_root" --manager "$manager_commit" --lock "$lock"
 cd "$task_root/dist"
 sha256sum *.tar.* > SHA256SUMS
+
