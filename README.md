@@ -3,10 +3,10 @@
 - [日本語化](overlay/japanese-fonts/): Protonへ日本語フォントを追加。
 - [Protonログ出力先](overlay/proton-logs/): Protonログを現在のセッションのログフォルダへ保存。
 - [Protonファイル導入](overlay/proton-import/): ファイル選択でARM64版Protonを追加・削除。
-- [Low Memoryモード](overlay/low-memory/): DXGI Budget制限・Steam未使用メモリ回収・Decky停止。
+- [Low Memoryモード](overlay/low-memory/): 端末RAM向けの設定・Steam未使用メモリ回収・Decky停止。
 
-- [ARM64 Proton修正](overlay/proton-ntcontext/): 本家の互換パッチとPEビルド条件を維持して独自修正を適用。
-- [VKD3D省メモリ](overlay/vkd3d-low-memory/): Low Memory時の未使用バッファ・描画プール保持を削減。
+- [ARM64 Proton修正](overlay/proton-ntcontext/): 本家DLLのNULLガード・Low Memory時のFEX検索RAM削減。
+- [VKD3D省メモリ](overlay/vkd3d-low-memory/): Low Memory時の未使用スクラッチバッファ保持を削減。
 - [ログ共有](overlay/log-share/): 実ログを変更せず省メモリの共有snapshotを作成。
 
 
