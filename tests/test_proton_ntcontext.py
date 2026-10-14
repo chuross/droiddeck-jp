@@ -382,6 +382,7 @@ class DroidDeckPackageTest(unittest.TestCase):
             (self.tree / name).write_text("upstream")
         (self.tree / "compatibilitytool.vdf").write_text(self.lock["build_name"])
         (self.tree / "proton").chmod(0o755)
+        (self.tree / "proton").write_text('class Proton:\n    def arch_pe_dir(self, d, wow64):\n        return self.lib_dir + d + "/" + (self.wow64_pe_arch if wow64 else self.host_pe_arch) + "/"\n')
         binaries = self.tree / "files/bin-arm64"
         binaries.mkdir(parents=True)
         header = b"\x7fELF\x02\x01" + b"\0" * 12 + (183).to_bytes(2, "little")
@@ -419,6 +420,8 @@ class DroidDeckPackageTest(unittest.TestCase):
                                                     marker=b"patched DROIDDECK_VKD3D_LOW_MEMORY"))
         self.smoke_path = results / "runtime-smoke.json"
         self.smoke_path.write_text(json.dumps({"stock": "passed", "patched": "passed",
+            "ntdll_stock_delta": {"method": "fixture"},
+            "patched_stock_graphics": "passed",
             "original_sha256": {"ntdll": package.sha256(package.original_ntdll(self.tree)),
                                 "dxgi": package.sha256(package.original_dxvk(self.tree)),
                                 "vkd3d": package.sha256(package.original_vkd3d(self.tree))},
@@ -433,6 +436,7 @@ class DroidDeckPackageTest(unittest.TestCase):
     def invoke(self):
         actual_run = subprocess.run
         with patch.object(package.subprocess, "check_output", side_effect=self.heads), \
+                patch.object(package, "verify_stock_ntdll", return_value={"method": "fixture"}), \
                 patch.object(package, "verify_upstream", return_value={"patches": [], "prepared_files": {}}), \
                 patch.object(package.subprocess, "run", wraps=subprocess.run) as run:
             def execute(args, **kwargs):
@@ -461,8 +465,25 @@ class DroidDeckPackageTest(unittest.TestCase):
                                     ("original_dxvk_dxgi_sha256", "rebuilt_dxvk_dxgi_sha256"),
                                     ("original_vkd3d_core_sha256", "rebuilt_vkd3d_core_sha256")):
             self.assertNotEqual(metadata[original], metadata[installed])
-        for locate in (package.original_ntdll, package.original_dxvk, package.original_vkd3d):
-            self.assertNotEqual(locate(packaged).read_bytes(), locate(self.tree).read_bytes())
+        self.assertNotEqual(package.original_ntdll(packaged).read_bytes(), package.original_ntdll(self.tree).read_bytes())
+        for locate in (package.original_dxvk, package.original_vkd3d):
+            self.assertEqual(locate(packaged).read_bytes(), locate(self.tree).read_bytes())
+        for key in ("dxvk_dxgi_archive_path", "vkd3d_core_archive_path"):
+            self.assertIn("droiddeck-low-memory", metadata[key])
+            self.assertTrue((packaged / metadata[key]).is_file())
+        namespace = {"os": __import__("os")}
+        exec((packaged / "proton").read_text(), namespace)
+        selector = namespace["Proton"]()
+        selector.lib_dir = str(packaged / "files/lib") + "/"
+        selector.host_pe_arch = "aarch64-windows"
+        selector.wow64_pe_arch = "i386-windows"
+        for setting in ("0", "1", "true", ""):
+            with patch.dict(__import__("os").environ, DROIDDECK_SESSION_LOW_MEMORY=setting):
+                for component in ("dxvk", "vkd3d-proton"):
+                    selected = selector.arch_pe_dir("wine/" + component, False)
+                    self.assertEqual("droiddeck-low-memory" in selected, setting == "1")
+                    self.assertNotIn("droiddeck-low-memory", selector.arch_pe_dir("wine/" + component, True))
+                self.assertNotIn("droiddeck-low-memory", selector.arch_pe_dir("wine", False))
         self.assertTrue((packaged / "droiddeck-source/vkd3d-low-memory/droiddeck_memory.h").is_file())
         self.assertTrue((packaged / "droiddeck-source/source.tar.xz").is_file())
         self.assertEqual((packaged / "LICENSE.proton").read_text(), "Valve license")
@@ -667,11 +688,15 @@ class DroidDeckReleaseTest(unittest.TestCase):
                     release.resolve_source("DroidDeck-Proton-11-7.5")
 
     def prepare_assets(self, directory, plan):
+        delta = {"method": "original-dll-arm64ec-leaf-guard", "maximum_modified_bytes": 24,
+                 "original_sha256": "a" * 64, "patched_sha256": "d" * 64}
         for name in release.asset_names(plan["lock"]) + [plan["lock"]["build_name"] + "-wine-source.tar.xz"]:
             (directory / name).write_text("evidence")
         (directory / "proton-build.json").write_text(json.dumps(
             dict(plan["lock"], manager_commit="e" * 40, dll_profile="patched",
                  replaced_dlls=["ntdll", "dxgi", "vkd3d"],
+                 ntdll_stock_delta=delta,
+                 default_graphics_sha256={"dxgi": "b" * 64, "vkd3d": "c" * 64},
                  features=["ntcontext-null-fix", "dxvk-dxgi-memory-budget-cap", "vkd3d-low-memory-pools"],
                  patches=["ntgetcontext-null.patch", "dxvk-memory-budget.patch", "vkd3d-low-memory.patch"],
                  original_ntdll_sha256="a" * 64, rebuilt_ntdll_sha256="d" * 64,
@@ -680,6 +705,8 @@ class DroidDeckReleaseTest(unittest.TestCase):
                  upstream_graphics_patches={"patches": [{"component": "dxvk"}, {"component": "vkd3d-proton"}],
                      "prepared_files": {"dxvk/state.c": "a" * 64, "vkd3d-proton/state.c": "b" * 64}},
                  runtime_verification={"stock": "passed", "patched": "passed",
+                     "ntdll_stock_delta": delta,
+                     "patched_stock_graphics": "passed",
                      "original_sha256": {"ntdll": "a" * 64, "dxgi": "b" * 64, "vkd3d": "c" * 64},
                      "dll_sha256": {"ntdll": "d" * 64, "dxgi": "e" * 64, "vkd3d": "f" * 64}})))
         (directory / "SHA256SUMS").write_text("".join(

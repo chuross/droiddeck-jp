@@ -219,6 +219,18 @@ def publish(repository, manager, plan, directory):
         raise RuntimeError("Original Proton graphics compatibility patches must be preserved")
     if smoke.get("stock") != "passed" or smoke.get("patched") != "passed":
         raise RuntimeError("Stock/patched DLL runtime checks must pass before publication")
+    delta = manifest.get("ntdll_stock_delta", {})
+    if (smoke.get("patched_stock_graphics") != "passed"
+            or manifest.get("default_graphics_sha256") != {
+                "dxgi": manifest.get("original_dxvk_dxgi_sha256"),
+                "vkd3d": manifest.get("original_vkd3d_core_sha256")}):
+        raise RuntimeError("Default graphics must match the original release")
+    if (delta.get("method") != "original-dll-arm64ec-leaf-guard"
+            or delta.get("maximum_modified_bytes") != 24
+            or delta.get("original_sha256") != manifest.get("original_ntdll_sha256")
+            or delta.get("patched_sha256") != manifest.get("rebuilt_ntdll_sha256")
+            or smoke.get("ntdll_stock_delta") != delta):
+        raise RuntimeError("Original ntdll guard verification must pass before publication")
     for name, original, installed in (("ntdll", "original_ntdll_sha256", "rebuilt_ntdll_sha256"),
                                       ("dxgi", "original_dxvk_dxgi_sha256", "rebuilt_dxvk_dxgi_sha256"),
                                       ("vkd3d", "original_vkd3d_core_sha256", "rebuilt_vkd3d_core_sha256")):

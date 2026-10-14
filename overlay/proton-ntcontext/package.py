@@ -2,6 +2,7 @@
 import argparse
 import hashlib
 import json
+import os
 from pathlib import Path
 import re
 import runpy
@@ -13,6 +14,7 @@ import tarfile
 ROOT = Path(__file__).resolve().parent
 VKD3D_ROOT = ROOT.parent / "vkd3d-low-memory"
 verify_upstream = runpy.run_path(str(ROOT / "prepare_upstream.py"))["verify"]
+verify_stock_ntdll = runpy.run_path(str(ROOT / "stock_ntdll.py"))["verify"]
 
 
 def sha256(path):
@@ -214,6 +216,33 @@ def import_layout(tree):
     return importer
 
 
+def install_optional_graphics(tree, targets, candidates):
+    for name in ("dxgi", "vkd3d"):
+        original = targets[name]
+        directory = original.parents[2] / "droiddeck-low-memory" / original.parent.parent.name / original.parent.name
+        directory.mkdir(parents=True)
+        for source in original.parent.iterdir():
+            if source.is_file():
+                destination = directory / source.name
+                if source == original:
+                    shutil.copy2(candidates[name], destination)
+                else:
+                    destination.symlink_to(os.path.relpath(source, directory))
+        candidates[name] = directory / original.name
+    proton = tree / "proton"
+    source = proton.read_text()
+    anchor = '    def arch_pe_dir(self, d, wow64):\n'
+    if source.count(anchor) != 1:
+        raise ValueError("original Proton graphics selector changed")
+    source = source.replace(anchor, anchor +
+        '        if (not wow64 and self.host_pe_arch == "aarch64-windows"\n'
+        '                and os.environ.get("DROIDDECK_SESSION_LOW_MEMORY", os.environ.get("DROIDDECK_LOW_MEMORY", "0")) == "1"\n'
+        '                and d in ("wine/dxvk", "wine/vkd3d-proton")):\n'
+        '            d = "wine/droiddeck-low-memory/" + d.split("/")[-1]\n')
+    write_preserving_mode(proton, source.encode())
+    return candidates
+
+
 def package(task, manager, lock_path=None):
     lock = json.loads((lock_path or ROOT / "build.lock.json").read_text())
     if lock["proton_repository"] != "https://github.com/Droid-Deck/DroidDeck-Proton.git":
@@ -266,18 +295,25 @@ def package(task, manager, lock_path=None):
     if b"DROIDDECK_VKD3D_LOW_MEMORY" not in rebuilt_d3d12.read_bytes():
         raise ValueError("rebuilt VKD3D low-memory switch is missing")
     original_ntdll_hash, original_dxvk_hash, original_vkd3d_hash = sha256(ntdll), sha256(dxvk), sha256(vkd3d)
+    ntdll_delta = verify_stock_ntdll(ntdll.read_bytes(), rebuilt.read_bytes())
     if (original_ntdll_hash == sha256(rebuilt) or original_dxvk_hash == sha256(rebuilt_graphics)
             or original_vkd3d_hash == sha256(rebuilt_d3d12)):
         raise ValueError("rebuilt DLL is unchanged")
     smoke = json.loads((task / "results/runtime-smoke.json").read_text())
+    if smoke.get("ntdll_stock_delta") != ntdll_delta:
+        raise ValueError("original DLL NULL guard verification is missing or stale")
+    if smoke.get("patched_stock_graphics") != "passed":
+        raise ValueError("default original graphics runtime verification is missing")
     hashes = {"ntdll": sha256(rebuilt), "dxgi": sha256(rebuilt_graphics), "vkd3d": sha256(rebuilt_d3d12)}
     if (smoke.get("stock") != "passed" or smoke.get("patched") != "passed"
             or smoke.get("dll_sha256") != hashes or smoke.get("original_sha256") != {
                 "ntdll": original_ntdll_hash, "dxgi": original_dxvk_hash, "vkd3d": original_vkd3d_hash}):
         raise ValueError("stock/patched DLL runtime verification is missing or stale")
     write_preserving_mode(ntdll, rebuilt.read_bytes())
-    write_preserving_mode(dxvk, rebuilt_graphics.read_bytes())
-    write_preserving_mode(vkd3d, rebuilt_d3d12.read_bytes())
+    optional = install_optional_graphics(tree, {"dxgi": dxvk, "vkd3d": vkd3d},
+                                         {"dxgi": rebuilt_graphics, "vkd3d": rebuilt_d3d12})
+    if sha256(dxvk) != original_dxvk_hash or sha256(vkd3d) != original_vkd3d_hash:
+        raise ValueError("default graphics DLLs differ from the original release")
     template = (task / "proton/compatibilitytool.vdf.template").read_text()
     if "##BUILD_NAME##" not in template or "##INTERNAL_TOOL_NAME##" not in template:
         raise ValueError("upstream compatibility template changed")
@@ -290,19 +326,22 @@ def package(task, manager, lock_path=None):
                     features=["ntcontext-null-fix", "dxvk-dxgi-memory-budget-cap", "vkd3d-low-memory-pools"],
                     patches=["ntgetcontext-null.patch", "dxvk-memory-budget.patch", "vkd3d-low-memory.patch"],
                     runtime_verification=smoke,
+                    ntdll_stock_delta=ntdll_delta,
+                    graphics_selection="stock by default; patched only when DROIDDECK_SESSION_LOW_MEMORY=1",
+                    default_graphics_sha256={"dxgi": sha256(dxvk), "vkd3d": sha256(vkd3d)},
                     upstream_graphics_patches=upstream,
                     candidate_ntdll_sha256=sha256(rebuilt),
                     candidate_dxvk_dxgi_sha256=sha256(rebuilt_graphics),
                     candidate_vkd3d_core_sha256=sha256(rebuilt_d3d12),
                     original_ntdll_sha256=original_ntdll_hash, original_dxvk_dxgi_sha256=original_dxvk_hash,
                     rebuilt_ntdll_sha256=sha256(ntdll),
-                    rebuilt_dxvk_dxgi_sha256=sha256(dxvk),
+                    rebuilt_dxvk_dxgi_sha256=sha256(optional["dxgi"]),
                     dxvk_dxgi_architecture="ARM64X",
-                    dxvk_dxgi_archive_path=str(dxvk.relative_to(tree)),
+                    dxvk_dxgi_archive_path=str(optional["dxgi"].relative_to(tree)),
                     original_vkd3d_core_sha256=original_vkd3d_hash,
-                    rebuilt_vkd3d_core_sha256=sha256(vkd3d),
+                    rebuilt_vkd3d_core_sha256=sha256(optional["vkd3d"]),
                     vkd3d_core_architecture="ARM64X",
-                    vkd3d_core_archive_path=str(vkd3d.relative_to(tree)),
+                    vkd3d_core_archive_path=str(optional["vkd3d"].relative_to(tree)),
                     fix="ARM64EC NtGetContextThread(NULL) returns STATUS_INVALID_PARAMETER")
     (tree / "droiddeck-ntcontext-build.json").write_text(json.dumps(metadata, indent=2) + "\n")
     dist = task / "dist"
@@ -312,7 +351,7 @@ def package(task, manager, lock_path=None):
     # Include exact patches, build inputs and source locations with the binary.
     source_info = tree / "droiddeck-source"
     source_info.mkdir()
-    for name in ("build.lock.json", "apply.py", "build.sh", "build-inside.sh", "build-dxvk.sh", "build_config.py", "prepare_upstream.py", "runtime_smoke.py", "runtime-probe.c", "dxvk-arm64ec.cross", "package.py",
+    for name in ("build.lock.json", "apply.py", "build.sh", "build-inside.sh", "build-dxvk.sh", "build_config.py", "prepare_upstream.py", "runtime_smoke.py", "stock_ntdll.py", "runtime-probe.c", "dxvk-arm64ec.cross", "package.py",
                  "ntgetcontext-null.patch", "dxvk-memory-budget.patch"):
         shutil.copy2(lock_path if name == "build.lock.json" and lock_path else ROOT / name, source_info / name)
     shutil.copytree(VKD3D_ROOT, source_info / "vkd3d-low-memory", ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))

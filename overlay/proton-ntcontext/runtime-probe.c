@@ -28,7 +28,7 @@ int main(int argc, char **argv)
     WaitForSingleObject(thread, INFINITE);
     CloseHandle(thread);
     if (status) { printf("valid context failed: %#lx\n", (unsigned long)status); return 4; }
-    if (!strcmp(argv[1], "patched") && (uint32_t)get_context(GetCurrentThread(), NULL) != 0xc000000du)
+    if (strncmp(argv[1], "patched", 7) == 0 && (uint32_t)get_context(GetCurrentThread(), NULL) != 0xc000000du)
         return 5;
     for (i = 0; i < 2; ++i)
     {

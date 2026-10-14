@@ -8,6 +8,7 @@ import subprocess
 
 from package import (base_tree, original_ntdll, original_dxvk, original_vkd3d,
                      pe_interface, sha256, write_preserving_mode)
+from stock_ntdll import patch as patch_stock_ntdll, verify as verify_stock_ntdll
 
 
 def windows_path(path):
@@ -33,6 +34,7 @@ def run_probe(task, tree, probe, targets, phase):
                LD_LIBRARY_PATH=":".join(library_paths) + ":" + os.environ.get("LD_LIBRARY_PATH", ""),
                WINEDLLOVERRIDES="dxgi,d3d12core=n;winemenubuilder.exe=d",
                FEX_DISKCACHE="0", FEX_APP_CONFIG=str(config),
+               DROIDDECK_VKD3D_LOW_MEMORY="1" if phase == "patched" else "0",
                FEX_APP_CONFIG_LOCATION=str(tree / "files/share/fex-emu"))
     log = task / ("results/runtime-" + phase + ".log")
     try:
@@ -65,6 +67,12 @@ def verify(task):
     rebuilt = {"ntdll": task / "results/ntdll.dll", "dxgi": task / "results/dxvk/dxgi.dll",
                "vkd3d": task / "results/vkd3d/d3d12core.dll"}
     original_hashes = {name: sha256(path) for name, path in targets.items()}
+    # Ship the original ntdll plus a 16-byte leaf guard, not the standalone
+    # Wine rebuild. That rebuild remains source/disassembly evidence only.
+    stock_ntdll = targets["ntdll"].read_bytes()
+    rebuilt["ntdll"].write_bytes(patch_stock_ntdll(stock_ntdll))
+    ntdll_delta = verify_stock_ntdll(stock_ntdll, rebuilt["ntdll"].read_bytes())
+    (task / "results/ntdll-stock-delta.json").write_text(json.dumps(ntdll_delta, indent=2) + "\n")
     for name, original in targets.items():
         with (task / ("results/stock-" + name + "-headers.txt")).open("w") as output:
             subprocess.run(["llvm-readobj", "--file-headers", "--coff-exports", "--coff-imports",
@@ -75,11 +83,15 @@ def verify(task):
     subprocess.run(["x86_64-w64-mingw32-gcc", "-O2", "-Wall", "-Wextra",
                     str(Path(__file__).with_name("runtime-probe.c")), "-o", str(probe)], check=True)
     run_probe(task, tree, probe, targets, "stock")
+    write_preserving_mode(targets["ntdll"], rebuilt["ntdll"].read_bytes())
+    run_probe(task, tree, probe, targets, "patched-stock-graphics")
     for name, target in targets.items():
         write_preserving_mode(target, rebuilt[name].read_bytes())
     run_probe(task, tree, probe, targets, "patched")
     report = {"stock": "passed", "patched": "passed", "original_sha256": original_hashes,
+              "patched_stock_graphics": "passed",
               "dll_sha256": {name: sha256(path) for name, path in rebuilt.items()},
+              "ntdll_stock_delta": ntdll_delta,
               "scope": "x64/ARM64EC thread context and native graphics DLL loading; GPU rendering untested"}
     (task / "results/runtime-smoke.json").write_text(json.dumps(report, indent=2) + "\n")
     print("Stock and patched ARM64EC DLL loading passed")
