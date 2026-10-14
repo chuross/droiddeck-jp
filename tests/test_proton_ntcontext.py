@@ -35,52 +35,6 @@ NTSTATUS SYSCALL_API NtGetContextThread( HANDLE handle, CONTEXT *context )
 '''
 
 
-# Pinned DXVK QueryVideoMemoryInfo, before the budget patch.
-DXVK_QUERY = """\
-  HRESULT STDMETHODCALLTYPE DxgiAdapter::QueryVideoMemoryInfo(
-          UINT                          NodeIndex,
-          DXGI_MEMORY_SEGMENT_GROUP     MemorySegmentGroup,
-          DXGI_QUERY_VIDEO_MEMORY_INFO* pVideoMemoryInfo) {
-    if (NodeIndex > 0 || !pVideoMemoryInfo)
-      return E_INVALIDARG;
-
-    if (MemorySegmentGroup != DXGI_MEMORY_SEGMENT_GROUP_LOCAL
-     && MemorySegmentGroup != DXGI_MEMORY_SEGMENT_GROUP_NON_LOCAL)
-      return E_INVALIDARG;
-
-    DxvkAdapterMemoryInfo memInfo = m_adapter->getMemoryHeapInfo();
-
-    VkMemoryHeapFlags heapFlagMask = VK_MEMORY_HEAP_DEVICE_LOCAL_BIT;
-    VkMemoryHeapFlags heapFlags    = 0;
-
-    if (MemorySegmentGroup == DXGI_MEMORY_SEGMENT_GROUP_LOCAL)
-      heapFlags |= VK_MEMORY_HEAP_DEVICE_LOCAL_BIT;
-
-    pVideoMemoryInfo->Budget = 0;
-    pVideoMemoryInfo->CurrentUsage = 0;
-    pVideoMemoryInfo->AvailableForReservation = 0;
-
-    for (uint32_t i = 0; i < memInfo.heapCount; i++) {
-      if ((memInfo.heaps[i].heapFlags & heapFlagMask) != heapFlags)
-        continue;
-
-      pVideoMemoryInfo->Budget += memInfo.heaps[i].memoryBudget;
-      pVideoMemoryInfo->CurrentUsage += memInfo.heaps[i].memoryAllocated;
-      pVideoMemoryInfo->AvailableForReservation += memInfo.heaps[i].heapSize / 2;
-    }
-
-    // We don't implement reservation, but the observable
-    // behaviour should match that of Windows drivers
-    uint32_t segmentId = uint32_t(MemorySegmentGroup);
-
-    pVideoMemoryInfo->CurrentReservation = m_memReservation[segmentId];
-    return S_OK;
-  }
-
-
-"""
-
-
 class ContextPatchTest(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -141,120 +95,6 @@ static void context_arm_to_x64(ARM64EC_NT_CONTEXT *target, ARM64_NT_CONTEXT *sou
         with self.assertRaises(subprocess.CalledProcessError):
             apply.apply(self.root)
         self.assertEqual(self.source.read_text(), changed)
-
-
-class DXVKBudgetTest(unittest.TestCase):
-    def setUp(self):
-        self.temp = tempfile.TemporaryDirectory()
-        self.addCleanup(self.temp.cleanup)
-        self.root = Path(self.temp.name)
-        subprocess.run(["git", "init", "-q", str(self.root)], check=True)
-        self.wine = self.root / "wine"
-        self.dxvk = self.root / "dxvk"
-        self.context = self.wine / "dlls/ntdll/signal_arm64ec.c"
-        self.adapter = self.dxvk / "src/dxgi/dxgi_adapter.cpp"
-        self.context.parent.mkdir(parents=True)
-        self.adapter.parent.mkdir(parents=True)
-        self.context.write_text(ORIGINAL)
-        self.adapter.write_text(DXVK_QUERY)
-        for source in (self.wine, self.dxvk):
-            subprocess.run(["git", "init", "-q", str(source)], check=True)
-
-    def test_dxvk_context_change_fails_before_wine_is_modified(self):
-        changed = DXVK_QUERY.replace("uint32_t segmentId = uint32_t(MemorySegmentGroup);", "upstream_changed")
-        self.adapter.write_text(changed)
-        with self.assertRaises(subprocess.CalledProcessError):
-            apply.apply(self.wine, self.dxvk)
-        self.assertEqual(self.context.read_text(), ORIGINAL)
-        self.assertEqual(self.adapter.read_text(), changed)
-
-    @unittest.skipUnless(shutil.which("c++"), "C++ compiler unavailable")
-    def test_actual_query_method_preserves_zero_limits_usage_and_segment_classification(self):
-        apply.apply(self.wine, self.dxvk)
-        harness = r'''#include <algorithm>
-#include <cassert>
-#include <cstdint>
-#include <cstring>
-using UINT = unsigned;
-using UINT64 = uint64_t;
-using HRESULT = int;
-using VkDeviceSize = uint64_t;
-using VkMemoryHeapFlags = unsigned;
-#define STDMETHODCALLTYPE
-#define E_INVALIDARG -1
-#define S_OK 0
-constexpr unsigned VK_MEMORY_HEAP_DEVICE_LOCAL_BIT = 1;
-enum DXGI_MEMORY_SEGMENT_GROUP { DXGI_MEMORY_SEGMENT_GROUP_LOCAL, DXGI_MEMORY_SEGMENT_GROUP_NON_LOCAL };
-struct DXGI_QUERY_VIDEO_MEMORY_INFO { uint64_t Budget, CurrentUsage, CurrentReservation, AvailableForReservation; };
-struct DxgiOptions { VkDeviceSize maxDeviceMemory = 0, maxSharedMemory = 0; };
-struct DxvkAdapterMemoryInfo {
-  unsigned heapCount = 0;
-  struct Heap { unsigned heapFlags; uint64_t memoryBudget, memoryAllocated, heapSize; } heaps[3];
-};
-struct Adapter { DxvkAdapterMemoryInfo info; auto getMemoryHeapInfo() { return info; } };
-struct Factory { DxgiOptions options; const DxgiOptions* GetOptions() { return &options; } };
-struct DxgiAdapter {
-  Adapter* m_adapter; Factory* m_factory; uint64_t m_memReservation[2] = {77, 88};
-  HRESULT QueryVideoMemoryInfo(UINT, DXGI_MEMORY_SEGMENT_GROUP, DXGI_QUERY_VIDEO_MEMORY_INFO*);
-};
-'''
-        harness += self.adapter.read_text()
-        harness += r'''int main() {
-  Adapter adapter; Factory factory; DxgiAdapter dxgi{&adapter, &factory};
-  const uint64_t MiB = 1024*1024;
-  for (uint64_t mb : {0, 1024, 2048, 3072}) {
-    for (bool uma : {false, true}) {
-      for (uint64_t size : {0, 512, 8192}) {
-        factory.options = {mb*MiB, (mb ? mb/2 : 0)*MiB};
-        adapter.info.heapCount = 3;
-        adapter.info.heaps[0] = {1, size*MiB, 2700*MiB, size*MiB*4};
-        adapter.info.heaps[1] = {1, size*MiB, 100*MiB, size*MiB};
-        adapter.info.heaps[2] = {uma ? 1u : 0u, size*MiB, 123*MiB, size*MiB*4};
-        for (auto group : {DXGI_MEMORY_SEGMENT_GROUP_LOCAL, DXGI_MEMORY_SEGMENT_GROUP_NON_LOCAL}) {
-          uint64_t budget=0, usage=0, available=0;
-          for (unsigned i=0;i<3;i++) {
-            auto heap=adapter.info.heaps[i];
-            if ((heap.heapFlags & 1) != (group == DXGI_MEMORY_SEGMENT_GROUP_LOCAL ? 1u : 0u)) continue;
-            budget+=heap.memoryBudget; usage+=heap.memoryAllocated; available+=heap.heapSize/2;
-          }
-          DXGI_QUERY_VIDEO_MEMORY_INFO info{};
-          assert(dxgi.QueryVideoMemoryInfo(0, group, &info) == S_OK);
-          uint64_t limit=group == DXGI_MEMORY_SEGMENT_GROUP_LOCAL ? factory.options.maxDeviceMemory : factory.options.maxSharedMemory;
-          auto result=limit ? std::min(budget,limit) : budget;
-          assert(info.Budget==result);
-          assert(info.CurrentUsage==usage);
-          assert(info.CurrentReservation==dxgi.m_memReservation[group]);
-          assert(info.AvailableForReservation==(limit ? std::min(available,result) : available));
-        }
-      }
-    }
-  }
-  // Independently disabled segment limits and reservation availability below budget.
-  adapter.info.heapCount=2;
-  adapter.info.heaps[0]={1, 8192*MiB, 2700*MiB, 1024*MiB};
-  adapter.info.heaps[1]={0, 8192*MiB, 123*MiB, 1024*MiB};
-  for (bool local : {false,true}) {
-    factory.options={local ? 2048*MiB : 0, local ? 0 : 2048*MiB};
-    for (auto group : {DXGI_MEMORY_SEGMENT_GROUP_LOCAL,DXGI_MEMORY_SEGMENT_GROUP_NON_LOCAL}) {
-      DXGI_QUERY_VIDEO_MEMORY_INFO info{};
-      dxgi.QueryVideoMemoryInfo(0,group,&info);
-      assert(info.Budget==((local == (group==DXGI_MEMORY_SEGMENT_GROUP_LOCAL)) ? 2048*MiB : 8192*MiB));
-      assert(info.AvailableForReservation==512*MiB);
-    }
-  }
-  DXGI_QUERY_VIDEO_MEMORY_INFO info{1,2,3,4}, before=info;
-  assert(dxgi.QueryVideoMemoryInfo(1,DXGI_MEMORY_SEGMENT_GROUP_LOCAL,&info)==E_INVALIDARG);
-  assert(!memcmp(&info,&before,sizeof(info)));
-  assert(dxgi.QueryVideoMemoryInfo(0,static_cast<DXGI_MEMORY_SEGMENT_GROUP>(2),&info)==E_INVALIDARG);
-  assert(!memcmp(&info,&before,sizeof(info)));
-  assert(dxgi.QueryVideoMemoryInfo(0,DXGI_MEMORY_SEGMENT_GROUP_LOCAL,nullptr)==E_INVALIDARG);
-}
-'''
-        file = self.root / "query-test.cpp"
-        file.write_text(harness)
-        binary = self.root / "query-test"
-        subprocess.run(["c++", "-std=c++17", "-Wall", "-Werror", str(file), "-o", str(binary)], check=True)
-        subprocess.run([str(binary)], check=True)
 
 
 class BuildEvidenceTest(unittest.TestCase):
@@ -409,9 +249,6 @@ class DroidDeckPackageTest(unittest.TestCase):
             "normal_maximum_lookup_bytes_per_thread": 16777216, "low_memory_lookup_bytes_per_thread": 131072,
             "translated_code_cache": "preserved", "live_game_allocations": "unchanged"}))
         (self.task / "proton").mkdir()
-        header = self.task / "proton/vkd3d-proton/libs/vkd3d/droiddeck_memory.h"
-        header.parent.mkdir(parents=True)
-        header.write_bytes((ROOT.parent / "vkd3d-low-memory/droiddeck_memory.h").read_bytes())
         (self.task / "proton/LICENSE.proton").write_text("Valve license")
         (self.task / "dist").mkdir()
         (self.task / "dist" / (self.lock["build_name"] + "-wine-source.tar.xz")).write_bytes(b"source")
@@ -419,11 +256,6 @@ class DroidDeckPackageTest(unittest.TestCase):
         (self.tree / "version").write_text(self.lock["base_version"] + "\n")
         (self.task / "proton/compatibilitytool.vdf.template").write_text('"##BUILD_NAME##" "##INTERNAL_TOOL_NAME##"')
         (results / "ntdll.dll").write_bytes(synthetic_pe(export="NtGetContextThread", marker=b"patched"))
-        (results / "dxvk").mkdir()
-        (results / "dxvk/dxgi.dll").write_bytes(synthetic_pe(marker=b"patched"))
-        (results / "vkd3d").mkdir()
-        (results / "vkd3d/d3d12core.dll").write_bytes(synthetic_pe(export="D3D12GetInterface",
-                                                    marker=b"patched DROIDDECK_VKD3D_LOW_MEMORY"))
         self.smoke_path = results / "runtime-smoke.json"
         self.smoke_path.write_text(json.dumps({"stock": "passed", "patched": "passed",
             "ntdll_stock_delta": {"method": "fixture"},
@@ -432,8 +264,8 @@ class DroidDeckPackageTest(unittest.TestCase):
                                 "dxgi": package.sha256(package.original_dxvk(self.tree)),
                                 "vkd3d": package.sha256(package.original_vkd3d(self.tree))},
             "dll_sha256": {"ntdll": package.sha256(results / "ntdll.dll"),
-                           "dxgi": package.sha256(results / "dxvk/dxgi.dll"),
-                           "vkd3d": package.sha256(results / "vkd3d/d3d12core.dll")}}))
+                           "dxgi": package.sha256(package.original_dxvk(self.tree)),
+                           "vkd3d": package.sha256(package.original_vkd3d(self.tree))}}))
         subprocess.run(["tar", "-czf", str(self.task / "base.tar.gz"), "-C", str(self.task / "base"), self.lock["base_directory"]], check=True)
         self.lock["base_sha256"] = package.sha256(self.task / "base.tar.gz")
         self.lock_path.write_text(json.dumps(self.lock))
@@ -465,17 +297,17 @@ class DroidDeckPackageTest(unittest.TestCase):
         self.assertEqual(metadata["vkd3d_core_architecture"], "ARM64X")
         self.assertEqual(metadata["dll_profile"], "patched")
         self.assertIn("ntcontext-null-fix", metadata["features"])
-        self.assertIn("vkd3d-low-memory-pools", metadata["features"])
-        self.assertEqual(metadata["replaced_dlls"], ["ntdll", "dxgi", "vkd3d"])
+        self.assertEqual(metadata["features"], ["ntcontext-null-fix", "fex-lookup-ram-retention"])
+        self.assertEqual(metadata["replaced_dlls"], ["ntdll"])
         for original, installed in (("original_ntdll_sha256", "rebuilt_ntdll_sha256"),
                                     ("original_dxvk_dxgi_sha256", "rebuilt_dxvk_dxgi_sha256"),
                                     ("original_vkd3d_core_sha256", "rebuilt_vkd3d_core_sha256")):
-            self.assertNotEqual(metadata[original], metadata[installed])
+            self.assertEqual(metadata[original] != metadata[installed], original == "original_ntdll_sha256")
         self.assertNotEqual(package.original_ntdll(packaged).read_bytes(), package.original_ntdll(self.tree).read_bytes())
         for locate in (package.original_dxvk, package.original_vkd3d):
             self.assertEqual(locate(packaged).read_bytes(), locate(self.tree).read_bytes())
         for key in ("dxvk_dxgi_archive_path", "vkd3d_core_archive_path"):
-            self.assertIn("droiddeck-low-memory", metadata[key])
+            self.assertNotIn("droiddeck-low-memory", metadata[key])
             self.assertTrue((packaged / metadata[key]).is_file())
         namespace = {"os": __import__("os")}
         exec((packaged / "proton").read_text(), namespace)
@@ -495,10 +327,10 @@ class DroidDeckPackageTest(unittest.TestCase):
             with patch.dict(__import__("os").environ, DROIDDECK_SESSION_LOW_MEMORY=setting):
                 for component in ("dxvk", "vkd3d-proton"):
                     selected = selector.arch_pe_dir("wine/" + component, False)
-                    self.assertEqual("droiddeck-low-memory" in selected, setting == "1")
+                    self.assertNotIn("droiddeck-low-memory", selected)
                     self.assertNotIn("droiddeck-low-memory", selector.arch_pe_dir("wine/" + component, True))
                 self.assertNotIn("droiddeck-low-memory", selector.arch_pe_dir("wine", False))
-        self.assertTrue((packaged / "droiddeck-source/vkd3d-low-memory/droiddeck_memory.h").is_file())
+        self.assertFalse((packaged / "files/lib/wine/droiddeck-low-memory").exists())
         self.assertTrue((packaged / "droiddeck-source/source.tar.xz").is_file())
         self.assertEqual((packaged / "LICENSE.proton").read_text(), "Valve license")
         self.assertTrue((self.task / "dist" / release.asset_names(self.lock)[0]).is_file())
@@ -545,40 +377,13 @@ class DroidDeckPackageTest(unittest.TestCase):
             self.invoke()
         self.assertFalse((self.task / "unpacked").exists())
 
-    def test_wrong_dxvk_architecture_prevents_packaging(self):
-        (self.task / "results/dxvk/dxgi.dll").write_bytes(synthetic_pe(machine=0x8664))
-        with self.assertRaisesRegex(ValueError, "architecture mismatch"):
-            self.invoke()
-        self.assertEqual(package.original_ntdll(self.task / "unpacked" / self.lock["base_directory"]).read_bytes(),
-                         package.original_ntdll(self.tree).read_bytes())
 
     def test_missing_patch_evidence_prevents_packaging(self):
         (self.task / "results/wine-patches.diff").write_text("")
         with self.assertRaisesRegex(ValueError, "evidence"):
             self.invoke()
 
-    def test_vkd3d_abi_and_missing_low_memory_switch_prevent_any_dll_replacement(self):
-        for binary, error in ((synthetic_pe(export="D3D12GetInterface", machine=0x8664), "architecture"),
-                              (synthetic_pe(export="Wrong"), "core export"),
-                              (synthetic_pe(export="D3D12GetInterface", marker=b"unpatched"), "switch")):
-            with self.subTest(error=error):
-                unpacked = self.task / "unpacked"
-                if unpacked.exists():
-                    shutil.rmtree(unpacked)
-                (self.task / "results/vkd3d/d3d12core.dll").write_bytes(binary)
-                with self.assertRaisesRegex(ValueError, error):
-                    self.invoke()
-                stock = unpacked / self.lock["base_directory"]
-                self.assertEqual(package.original_ntdll(stock).read_bytes(), package.original_ntdll(self.tree).read_bytes())
 
-    def test_vkd3d_source_and_policy_mismatch_prevent_packaging(self):
-        self.heads[-1] = "0" * 40
-        with self.assertRaisesRegex(ValueError, "source commit"):
-            self.invoke()
-        self.heads[-1] = self.lock["vkd3d_commit"] + "\n"
-        (self.task / "proton/vkd3d-proton/libs/vkd3d/droiddeck_memory.h").write_text("wrong policy")
-        with self.assertRaisesRegex(ValueError, "policy"):
-            self.invoke()
 
 
 class DroidDeckReleaseTest(unittest.TestCase):
@@ -708,34 +513,34 @@ class DroidDeckReleaseTest(unittest.TestCase):
             (directory / name).write_text("evidence")
         (directory / "proton-build.json").write_text(json.dumps(
             dict(plan["lock"], manager_commit="e" * 40, dll_profile="patched",
-                 replaced_dlls=["ntdll", "dxgi", "vkd3d"],
+                 replaced_dlls=["ntdll"],
                  ntdll_stock_delta=delta,
                  ram_policy={"method": "minimum-per-thread-FEX-lookup-table", "fex_commit": "14c92681f4d62cf84d901460e0358de09c8847a7",
                              "normal_maximum_lookup_bytes_per_thread": 16777216, "low_memory_lookup_bytes_per_thread": 131072,
                              "translated_code_cache": "preserved", "live_game_allocations": "unchanged"},
                  default_graphics_sha256={"dxgi": "b" * 64, "vkd3d": "c" * 64},
-                 features=["ntcontext-null-fix", "dxvk-dxgi-memory-budget-cap", "vkd3d-low-memory-pools"],
-                 patches=["ntgetcontext-null.patch", "dxvk-memory-budget.patch", "vkd3d-low-memory.patch"],
+                 features=["ntcontext-null-fix", "fex-lookup-ram-retention"],
+                 patches=["ntgetcontext-null.patch"],
                  original_ntdll_sha256="a" * 64, rebuilt_ntdll_sha256="d" * 64,
-                 original_dxvk_dxgi_sha256="b" * 64, rebuilt_dxvk_dxgi_sha256="e" * 64,
-                 original_vkd3d_core_sha256="c" * 64, rebuilt_vkd3d_core_sha256="f" * 64,
+                 original_dxvk_dxgi_sha256="b" * 64, rebuilt_dxvk_dxgi_sha256="b" * 64,
+                 original_vkd3d_core_sha256="c" * 64, rebuilt_vkd3d_core_sha256="c" * 64,
                  upstream_graphics_patches={"patches": [{"component": "dxvk"}, {"component": "vkd3d-proton"}],
                      "prepared_files": {"dxvk/state.c": "a" * 64, "vkd3d-proton/state.c": "b" * 64}},
                  runtime_verification={"stock": "passed", "patched": "passed",
                      "ntdll_stock_delta": delta,
                      "patched_stock_graphics": "passed",
                      "original_sha256": {"ntdll": "a" * 64, "dxgi": "b" * 64, "vkd3d": "c" * 64},
-                     "dll_sha256": {"ntdll": "d" * 64, "dxgi": "e" * 64, "vkd3d": "f" * 64}})))
+                     "dll_sha256": {"ntdll": "d" * 64, "dxgi": "b" * 64, "vkd3d": "c" * 64}})))
         (directory / "SHA256SUMS").write_text("".join(
             hashlib.sha256((directory / name).read_bytes()).hexdigest() + "  " + name + "\n"
             for name in release.asset_names(plan["lock"]) + [plan["lock"]["build_name"] + "-wine-source.tar.xz"]))
 
     def test_unverified_or_changed_dlls_cannot_be_published(self):
         plan = self.plan()
-        for change in ({"dll_profile": "stock"}, {"replaced_dlls": ["ntdll"]},
+        for change in ({"dll_profile": "stock"}, {"replaced_dlls": ["ntdll", "dxgi"]},
                        {"features": ["ntcontext-null-fix"]},
                        {"rebuilt_ntdll_sha256": "0" * 64}, {"runtime_verification": {}},
-                       {"original_dxvk_dxgi_sha256": ""}, {"upstream_graphics_patches": {}}):
+                       {"original_dxvk_dxgi_sha256": ""}, {"rebuilt_vkd3d_core_sha256": "f" * 64}, {"upstream_graphics_patches": {}}):
             with self.subTest(change=change), tempfile.TemporaryDirectory() as temporary:
                 directory = Path(temporary)
                 self.prepare_assets(directory, plan)

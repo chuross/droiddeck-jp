@@ -25,11 +25,7 @@ DROIDDECK_FEX_SOURCE="$task_root/proton/FEX" \
     python3 -m unittest discover -s "$manager_root/tests" -p 'test_proton_ram.py' -v
 python3 "$manager_root/overlay/proton-ntcontext/prepare_upstream.py" "$task_root/proton" \
     --output "$task_root/results/upstream-patches.json"
-python3 "$manager_root/overlay/vkd3d-low-memory/apply.py" "$task_root/proton/vkd3d-proton" --check
-python3 "$manager_root/overlay/proton-ntcontext/apply.py" --wine-source "$task_root/proton/wine" --dxvk-source "$task_root/proton/dxvk"
-python3 "$manager_root/overlay/vkd3d-low-memory/apply.py" "$task_root/proton/vkd3d-proton"
-DROIDDECK_VKD3D_SOURCE="$task_root/proton/vkd3d-proton" \
-    python3 -m unittest discover -s "$manager_root/tests" -p 'test_vkd3d_low_memory.py' -v
+python3 "$manager_root/overlay/proton-ntcontext/apply.py" --wine-source "$task_root/proton/wine"
 mkdir -p "$task_root/results"
 git -C "$task_root/proton/wine" diff --binary > "$task_root/results/wine-patches.diff"
 git -C "$task_root/proton/dxvk" diff --binary > "$task_root/results/dxvk-patches.diff"
@@ -41,8 +37,8 @@ docker run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp -v "$manager_root:$manag
 rm -rf "$task_root/runtime-reference" "$task_root/smoke-prefix-stock" "$task_root/smoke-prefix-patched"
 manager_commit="${GITHUB_SHA:-$(git -C "$manager_root" rev-parse HEAD)}"
 mkdir -p "$task_root/dist"
-# Keep all component sources and build inputs in CI, including downloaded contrib sources.
-tar --exclude=.git -cJf "$task_root/dist/$(read_lock build_name)-wine-source.tar.xz" -C "$task_root" proton build.lock.json -C "$manager_root" overlay/proton-ntcontext overlay/vkd3d-low-memory
+# Keep original component sources and the remaining Wine/FEX build inputs in CI.
+tar --exclude=.git -cJf "$task_root/dist/$(read_lock build_name)-wine-source.tar.xz" -C "$task_root" proton build.lock.json -C "$manager_root" overlay/proton-ntcontext
 python3 "$manager_root/overlay/proton-ntcontext/package.py" "$task_root" --manager "$manager_commit" --lock "$lock"
 cd "$task_root/dist"
 sha256sum *.tar.* > SHA256SUMS

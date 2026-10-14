@@ -19,10 +19,6 @@ CFLAGS += -ggdb -ffunction-sections -fdata-sections -fno-omit-frame-pointer
 CFLAGS += -ffile-prefix-map=$(CCACHE_BASEDIR)=.
 $(DST_DIR):
 WINE_CFLAGS += -Wno-discarded-qualifiers
-DXVK_arm64ec_CFLAGS = -marm64x
-DXVK_arm64ec_LDFLAGS = -marm64x
-VKD3D_PROTON_arm64ec_CFLAGS = -marm64x
-VKD3D_PROTON_arm64ec_LDFLAGS = -marm64x
 '''
 
 
@@ -46,18 +42,14 @@ class ProtonBuildConfigTest(unittest.TestCase):
         self.assertNotIn("-march=armv8.2-a", shlex.split(env["x86_64_CFLAGS"]))
         self.assertIn("-march=armv8.2-a", shlex.split(env["arm64ec_CFLAGS"]))
 
-    def test_upstream_flag_changes_propagate_to_wine_and_graphics(self):
+    def test_upstream_flag_changes_propagate_to_wine(self):
         self.makefile.write_text(MAKEFILE.replace("-fwrapv", "-fwrapv -fno-vectorize"))
         values = config.flags(self.source)
         self.assertIn("-fno-vectorize", config.wine_environment(values)["CROSSCFLAGS"])
-        for component in ("dxvk", "vkd3d"):
-            cross = config.cross_file(values, ROOT / "dxvk-arm64ec.cross", component)
-            self.assertIn("'-fno-vectorize'", cross)
-            self.assertIn("'-marm64x'", cross)
 
     def test_changed_or_missing_upstream_flag_definitions_fail(self):
         for changed in (MAKEFILE.replace("$(DST_DIR):", "other:"),
-                        MAKEFILE.replace("DXVK_arm64ec_CFLAGS = -marm64x\n", ""),
+                        MAKEFILE.replace("WINE_CFLAGS += -Wno-discarded-qualifiers\n", ""),
                         MAKEFILE + "WINE_CFLAGS += -unexpected\n"):
             with self.subTest(changed=changed):
                 self.makefile.write_text(changed)

@@ -119,9 +119,7 @@ def source_identity(lock):
     files = sorted(path for path in ROOT.iterdir()
                    if path.is_file() and path.name != "build.lock.json")
     files += [ROOT.parents[1] / ".github/workflows/proton.yml",
-              ROOT.parents[1] / "tests/test_proton_ntcontext.py",
-              ROOT.parents[1] / "tests/test_vkd3d_low_memory.py"]
-    files += sorted(path for path in (ROOT.parent / "vkd3d-low-memory").iterdir() if path.is_file())
+              ROOT.parents[1] / "tests/test_proton_ntcontext.py"]
     for path in files:
         digest.update(path.name.encode() + b"\0" + path.read_bytes())
     return "<!-- proton-source: " + digest.hexdigest() + " -->"
@@ -209,8 +207,8 @@ def publish(repository, manager, plan, directory):
     manifest = json.loads((directory / "proton-build.json").read_text())
     if manifest.get("manager_commit") != manager or any(manifest.get(key) != value for key, value in lock.items()):
         raise RuntimeError("Proton build provenance differs from release plan")
-    if (manifest.get("dll_profile") != "patched" or manifest.get("replaced_dlls") != ["ntdll", "dxgi", "vkd3d"]
-            or manifest.get("features") != ["ntcontext-null-fix", "dxvk-dxgi-memory-budget-cap", "vkd3d-low-memory-pools"]):
+    if (manifest.get("dll_profile") != "patched" or manifest.get("replaced_dlls") != ["ntdll"]
+            or manifest.get("features") != ["ntcontext-null-fix", "fex-lookup-ram-retention"]):
         raise RuntimeError("Expected the verified patched Proton build")
     smoke = manifest.get("runtime_verification", {})
     ram = manifest.get("ram_policy", {})
@@ -244,7 +242,7 @@ def publish(repository, manager, plan, directory):
         if (not re.fullmatch(r"[0-9a-f]{64}", manifest.get(original, ""))
                 or smoke.get("original_sha256", {}).get(name) != manifest[original]
                 or smoke.get("dll_sha256", {}).get(name) != manifest.get(installed)
-                or manifest[original] == manifest.get(installed)):
+                or ((name == "ntdll") != (manifest[original] != manifest.get(installed)))):
             raise RuntimeError("DLL runtime evidence does not match the published build")
     expected = {}
     for path in (assets[0], directory / (lock["build_name"] + "-wine-source.tar.xz")):

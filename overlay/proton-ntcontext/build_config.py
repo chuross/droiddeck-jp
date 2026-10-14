@@ -14,8 +14,7 @@ def flags(source):
     if text.count(boundary) != 1:
         raise ValueError("Proton global build configuration changed")
     names = ("CFLAGS", "i386_CFLAGS", "x86_64_CFLAGS", "aarch64_CFLAGS", "arm64ec_CFLAGS",
-             "WINE_CFLAGS", "DXVK_arm64ec_CFLAGS", "DXVK_arm64ec_LDFLAGS",
-             "VKD3D_PROTON_arm64ec_CFLAGS", "VKD3D_PROTON_arm64ec_LDFLAGS")
+             "WINE_CFLAGS")
     component = []
     for name in names[5:]:
         matches = re.findall(r"(?m)^" + name + r"\s*[+:?]?=\s*[^\n]+$", text)
@@ -50,24 +49,10 @@ def wine_environment(values):
     return result
 
 
-def cross_file(values, template, component):
-    prefix = "DXVK" if component == "dxvk" else "VKD3D_PROTON"
-    compile_flags = values["arm64ec_CFLAGS"] + values[prefix + "_arm64ec_CFLAGS"] + values["CFLAGS"]
-    link_flags = values[prefix + "_arm64ec_LDFLAGS"]
-    text = template.read_text()
-    for name, args in (("c_args", compile_flags), ("cpp_args", compile_flags),
-                       ("c_link_args", link_flags), ("cpp_link_args", link_flags)):
-        text, count = re.subn(r"(?m)^" + name + r" = .*", name + " = " + repr(args), text)
-        if count != 1:
-            raise ValueError("cross-file template changed: " + name)
-    return text
-
-
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("source", type=Path)
     parser.add_argument("--wine-build", type=Path)
-    parser.add_argument("--cross", choices=("dxvk", "vkd3d"))
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     values = flags(args.source)
@@ -78,7 +63,5 @@ if __name__ == "__main__":
                         "--enable-archs=arm64ec,aarch64,i386,x86_64", "--with-mingw=clang",
                         "--disable-tests", "--without-x", "--without-wayland", "--without-ffmpeg"],
                        cwd=args.wine_build, env=env, check=True)
-    elif args.cross:
-        args.output.write_text(cross_file(values, Path(__file__).with_name("dxvk-arm64ec.cross"), args.cross))
     else:
-        parser.error("select --wine-build or --cross")
+        parser.error("select --wine-build")

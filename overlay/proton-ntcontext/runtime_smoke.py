@@ -35,7 +35,6 @@ def run_probe(task, tree, probe, targets, phase):
                LD_LIBRARY_PATH=":".join(library_paths) + ":" + os.environ.get("LD_LIBRARY_PATH", ""),
                WINEDLLOVERRIDES="dxgi,d3d12core=n;winemenubuilder.exe=d",
                FEX_DISKCACHE="0", FEX_APP_CONFIG=str(config),
-               DROIDDECK_VKD3D_LOW_MEMORY="1" if phase == "patched" else "0",
                DROIDDECK_SESSION_LOW_MEMORY="1" if phase == "patched" else "0",
                FEX_APP_CONFIG_LOCATION=str(tree / "files/share/fex-emu"))
     configure_ram(env)
@@ -67,8 +66,7 @@ def verify(task):
     subprocess.run(["tar", "-xzf", str(task / "base.tar.gz"), "--same-permissions", "-C", str(staging)], check=True)
     tree = base_tree(staging)
     targets = {"ntdll": original_ntdll(tree), "dxgi": original_dxvk(tree), "vkd3d": original_vkd3d(tree)}
-    rebuilt = {"ntdll": task / "results/ntdll.dll", "dxgi": task / "results/dxvk/dxgi.dll",
-               "vkd3d": task / "results/vkd3d/d3d12core.dll"}
+    rebuilt = dict(targets, ntdll=task / "results/ntdll.dll")
     original_hashes = {name: sha256(path) for name, path in targets.items()}
     # Ship the original ntdll plus a 16-byte leaf guard, not the standalone
     # Wine rebuild. That rebuild remains source/disassembly evidence only.
@@ -88,8 +86,6 @@ def verify(task):
     run_probe(task, tree, probe, targets, "stock")
     write_preserving_mode(targets["ntdll"], rebuilt["ntdll"].read_bytes())
     run_probe(task, tree, probe, targets, "patched-stock-graphics")
-    for name, target in targets.items():
-        write_preserving_mode(target, rebuilt[name].read_bytes())
     run_probe(task, tree, probe, targets, "patched")
     report = {"stock": "passed", "patched": "passed", "original_sha256": original_hashes,
               "patched_stock_graphics": "passed",

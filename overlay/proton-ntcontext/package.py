@@ -12,7 +12,6 @@ import subprocess
 import tarfile
 
 ROOT = Path(__file__).resolve().parent
-VKD3D_ROOT = ROOT.parent / "vkd3d-low-memory"
 verify_upstream = runpy.run_path(str(ROOT / "prepare_upstream.py"))["verify"]
 verify_stock_ntdll = runpy.run_path(str(ROOT / "stock_ntdll.py"))["verify"]
 
@@ -161,15 +160,6 @@ def original_dxvk(tree):
     return original
 
 
-def rebuilt_dxvk(results):
-    candidates = {path.resolve() for path in (results / "dxvk").rglob("dxgi.dll") if path.is_file()}
-    if len(candidates) != 1:
-        raise ValueError("expected exactly one rebuilt DXVK DXGI; missing or ambiguous output")
-    rebuilt = candidates.pop()
-    dxvk_interface(rebuilt)
-    return rebuilt
-
-
 def vkd3d_interface(path):
     interface = pe_interface(path)
     if interface["machine"] != 0xaa64 or not interface["arm64x_metadata"]:
@@ -216,29 +206,9 @@ def import_layout(tree):
     return importer
 
 
-def install_optional_graphics(tree, targets, candidates):
-    for name in ("dxgi", "vkd3d"):
-        original = targets[name]
-        directory = original.parents[2] / "droiddeck-low-memory" / original.parent.parent.name / original.parent.name
-        directory.mkdir(parents=True)
-        for source in original.parent.iterdir():
-            if source.is_file():
-                destination = directory / source.name
-                if source == original:
-                    shutil.copy2(candidates[name], destination)
-                else:
-                    destination.symlink_to(os.path.relpath(source, directory))
-        candidates[name] = directory / original.name
+def install_ram_policy(tree):
     proton = tree / "proton"
     source = proton.read_text()
-    anchor = '    def arch_pe_dir(self, d, wow64):\n'
-    if source.count(anchor) != 1:
-        raise ValueError("original Proton graphics selector changed")
-    source = source.replace(anchor, anchor +
-        '        if (not wow64 and self.host_pe_arch == "aarch64-windows"\n'
-        '                and os.environ.get("DROIDDECK_SESSION_LOW_MEMORY", os.environ.get("DROIDDECK_LOW_MEMORY", "0")) == "1"\n'
-        '                and d in ("wine/dxvk", "wine/vkd3d-proton")):\n'
-        '            d = "wine/droiddeck-low-memory/" + d.split("/")[-1]\n')
     ram_anchor = '            self.env.setdefault("FEX_DISKCACHE", "1")\n'
     if source.count(ram_anchor) != 1:
         raise ValueError("original Proton FEX startup changed")
@@ -247,7 +217,6 @@ def install_optional_graphics(tree, targets, candidates):
         '            configure_ram(self.env)\n')
     write_preserving_mode(proton, source.encode())
     shutil.copy2(ROOT / "droiddeck_ram.py", tree / "droiddeck_ram.py")
-    return candidates
 
 
 def package(task, manager, lock_path=None):
@@ -261,19 +230,12 @@ def package(task, manager, lock_path=None):
         if actual != expected:
             raise ValueError("source commit differs from lock")
     check_disassembly((task / "results/signal-arm64ec-disassembly.txt").read_text())
-    for name, patch in (("wine", ROOT / "ntgetcontext-null.patch"), ("dxvk", ROOT / "dxvk-memory-budget.patch"),
-                        ("vkd3d-proton", VKD3D_ROOT / "vkd3d-low-memory.patch")):
-        evidence = (task / ("results/" + name + "-patches.diff")).read_text()
-        if not evidence.strip():
-            raise ValueError("patch evidence is missing")
-        subprocess.run(["git", "-C", str(task / "proton" / name), "apply", "--reverse",
-                        "--check", str(patch)], check=True)
-    header = task / "proton/vkd3d-proton/libs/vkd3d/droiddeck_memory.h"
-    if header.read_bytes() != (VKD3D_ROOT / "droiddeck_memory.h").read_bytes():
-        raise ValueError("VKD3D low-memory policy differs from checked source")
-    upstream = verify_upstream(task / "proton", task / "results/upstream-patches.json",
-                               {"dxvk": ROOT / "dxvk-memory-budget.patch",
-                                "vkd3d-proton": VKD3D_ROOT / "vkd3d-low-memory.patch"})
+    evidence = (task / "results/wine-patches.diff").read_text()
+    if not evidence.strip():
+        raise ValueError("patch evidence is missing")
+    subprocess.run(["git", "-C", str(task / "proton/wine"), "apply", "--reverse",
+                    "--check", str(ROOT / "ntgetcontext-null.patch")], check=True)
+    upstream = verify_upstream(task / "proton", task / "results/upstream-patches.json", {})
     archive = task / "base.tar.gz"
     if sha256(archive) != lock["base_sha256"]:
         raise ValueError("base archive checksum mismatch")
@@ -292,33 +254,23 @@ def package(task, manager, lock_path=None):
     if interface != pe_interface(ntdll) or interface["machine"] != 0xaa64 or not interface["arm64x_metadata"] or "NtGetContextThread" not in interface["exports"]:
         raise ValueError("rebuilt ARM64X ntdll interface differs from stock")
     dxvk = original_dxvk(tree)
-    rebuilt_graphics = rebuilt_dxvk(task / "results")
-    if dxvk_interface(dxvk) != dxvk_interface(rebuilt_graphics):
-        raise ValueError("rebuilt DXGI interface differs from stock")
     vkd3d = original_vkd3d(tree)
-    rebuilt_d3d12 = task / "results/vkd3d/d3d12core.dll"
-    if vkd3d_interface(vkd3d) != vkd3d_interface(rebuilt_d3d12):
-        raise ValueError("rebuilt VKD3D interface differs from stock")
-    if b"DROIDDECK_VKD3D_LOW_MEMORY" not in rebuilt_d3d12.read_bytes():
-        raise ValueError("rebuilt VKD3D low-memory switch is missing")
     original_ntdll_hash, original_dxvk_hash, original_vkd3d_hash = sha256(ntdll), sha256(dxvk), sha256(vkd3d)
     ntdll_delta = verify_stock_ntdll(ntdll.read_bytes(), rebuilt.read_bytes())
-    if (original_ntdll_hash == sha256(rebuilt) or original_dxvk_hash == sha256(rebuilt_graphics)
-            or original_vkd3d_hash == sha256(rebuilt_d3d12)):
+    if original_ntdll_hash == sha256(rebuilt):
         raise ValueError("rebuilt DLL is unchanged")
     smoke = json.loads((task / "results/runtime-smoke.json").read_text())
     if smoke.get("ntdll_stock_delta") != ntdll_delta:
         raise ValueError("original DLL NULL guard verification is missing or stale")
     if smoke.get("patched_stock_graphics") != "passed":
         raise ValueError("default original graphics runtime verification is missing")
-    hashes = {"ntdll": sha256(rebuilt), "dxgi": sha256(rebuilt_graphics), "vkd3d": sha256(rebuilt_d3d12)}
+    hashes = {"ntdll": sha256(rebuilt), "dxgi": original_dxvk_hash, "vkd3d": original_vkd3d_hash}
     if (smoke.get("stock") != "passed" or smoke.get("patched") != "passed"
             or smoke.get("dll_sha256") != hashes or smoke.get("original_sha256") != {
                 "ntdll": original_ntdll_hash, "dxgi": original_dxvk_hash, "vkd3d": original_vkd3d_hash}):
         raise ValueError("stock/patched DLL runtime verification is missing or stale")
     write_preserving_mode(ntdll, rebuilt.read_bytes())
-    optional = install_optional_graphics(tree, {"dxgi": dxvk, "vkd3d": vkd3d},
-                                         {"dxgi": rebuilt_graphics, "vkd3d": rebuilt_d3d12})
+    install_ram_policy(tree)
     if sha256(dxvk) != original_dxvk_hash or sha256(vkd3d) != original_vkd3d_hash:
         raise ValueError("default graphics DLLs differ from the original release")
     template = (task / "proton/compatibilitytool.vdf.template").read_text()
@@ -330,26 +282,24 @@ def package(task, manager, lock_path=None):
         raise ValueError("SDK image digest is missing")
     metadata = dict(lock, manager_commit=manager, sdk_digests=sdk_digests,
                     ram_policy=json.loads((task / "results/ram-source-audit.json").read_text()),
-                    dll_profile="patched", replaced_dlls=["ntdll", "dxgi", "vkd3d"],
-                    features=["ntcontext-null-fix", "dxvk-dxgi-memory-budget-cap", "vkd3d-low-memory-pools"],
-                    patches=["ntgetcontext-null.patch", "dxvk-memory-budget.patch", "vkd3d-low-memory.patch"],
+                    dll_profile="patched", replaced_dlls=["ntdll"],
+                    features=["ntcontext-null-fix", "fex-lookup-ram-retention"],
+                    patches=["ntgetcontext-null.patch"],
                     runtime_verification=smoke,
                     ntdll_stock_delta=ntdll_delta,
-                    graphics_selection="stock by default; patched only when DROIDDECK_SESSION_LOW_MEMORY=1",
+                    graphics_selection="original release DLLs in all modes",
                     default_graphics_sha256={"dxgi": sha256(dxvk), "vkd3d": sha256(vkd3d)},
                     upstream_graphics_patches=upstream,
                     candidate_ntdll_sha256=sha256(rebuilt),
-                    candidate_dxvk_dxgi_sha256=sha256(rebuilt_graphics),
-                    candidate_vkd3d_core_sha256=sha256(rebuilt_d3d12),
                     original_ntdll_sha256=original_ntdll_hash, original_dxvk_dxgi_sha256=original_dxvk_hash,
                     rebuilt_ntdll_sha256=sha256(ntdll),
-                    rebuilt_dxvk_dxgi_sha256=sha256(optional["dxgi"]),
+                    rebuilt_dxvk_dxgi_sha256=sha256(dxvk),
                     dxvk_dxgi_architecture="ARM64X",
-                    dxvk_dxgi_archive_path=str(optional["dxgi"].relative_to(tree)),
+                    dxvk_dxgi_archive_path=str(dxvk.relative_to(tree)),
                     original_vkd3d_core_sha256=original_vkd3d_hash,
-                    rebuilt_vkd3d_core_sha256=sha256(optional["vkd3d"]),
+                    rebuilt_vkd3d_core_sha256=sha256(vkd3d),
                     vkd3d_core_architecture="ARM64X",
-                    vkd3d_core_archive_path=str(optional["vkd3d"].relative_to(tree)),
+                    vkd3d_core_archive_path=str(vkd3d.relative_to(tree)),
                     fix="ARM64EC NtGetContextThread(NULL) returns STATUS_INVALID_PARAMETER")
     (tree / "droiddeck-ntcontext-build.json").write_text(json.dumps(metadata, indent=2) + "\n")
     dist = task / "dist"
@@ -359,10 +309,9 @@ def package(task, manager, lock_path=None):
     # Include exact patches, build inputs and source locations with the binary.
     source_info = tree / "droiddeck-source"
     source_info.mkdir()
-    for name in ("build.lock.json", "apply.py", "build.sh", "build-inside.sh", "build-dxvk.sh", "build_config.py", "prepare_upstream.py", "runtime_smoke.py", "stock_ntdll.py", "droiddeck_ram.py", "runtime-probe.c", "dxvk-arm64ec.cross", "package.py",
-                 "ntgetcontext-null.patch", "dxvk-memory-budget.patch"):
+    for name in ("build.lock.json", "apply.py", "build.sh", "build-inside.sh", "build_config.py", "prepare_upstream.py", "runtime_smoke.py", "stock_ntdll.py", "droiddeck_ram.py", "runtime-probe.c", "package.py",
+                 "ntgetcontext-null.patch"):
         shutil.copy2(lock_path if name == "build.lock.json" and lock_path else ROOT / name, source_info / name)
-    shutil.copytree(VKD3D_ROOT, source_info / "vkd3d-low-memory", ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
     shutil.copy2(task / "proton/LICENSE.proton", tree / "LICENSE.proton")
     shutil.copy2(dist / (lock["build_name"] + "-wine-source.tar.xz"), source_info / "source.tar.xz")
     packaged = staging / lock["build_name"]

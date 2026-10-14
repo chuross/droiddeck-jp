@@ -21,16 +21,18 @@ spec.loader.exec_module(APPLY)
 
 
 class LowMemoryTest(unittest.TestCase):
-    def test_vkd3d_reclaim_follows_session_mode_and_game_opt_out(self):
-        for option, expected in ((None, "1"), ("1", "1"), ("0", "0")):
-            env = {LOW["SESSION"]: "1"}
-            if option is not None:
-                env[LOW["VKD3D"]] = option
-            self.assertEqual(LOW["game_environment"](env)["DROIDDECK_VKD3D_LOW_MEMORY"], expected)
-            self.assertNotIn("DROIDDECK_VKD3D_LOW_MEMORY", env)
-        off = {LOW["SESSION"]: "0", LOW["MODE"]: "1"}
-        self.assertIs(LOW["game_environment"](off), off)
-        self.assertNotIn("DROIDDECK_VKD3D_LOW_MEMORY", off)
+
+    def test_retired_gpu_profile_values_are_ignored_in_both_modes(self):
+        for mode in ("0", "1"):
+            original = {LOW["SESSION"]: mode, "DROIDDECK_GPU_MEMORY_MB": "2048",
+                        "DROIDDECK_LOW_MEMORY_VKD3D": "1", "DROIDDECK_VKD3D_LOW_MEMORY": "1",
+                        "DXVK_CONFIG": "dxvk.maxFrameRate = 60", "VKD3D_CONFIG": "user settings"}
+            result = LOW["game_environment"](original)
+            for key in ("DROIDDECK_GPU_MEMORY_MB", "DROIDDECK_LOW_MEMORY_VKD3D", "DROIDDECK_VKD3D_LOW_MEMORY"):
+                self.assertNotIn(key, result)
+                self.assertIn(key, original)
+            self.assertEqual(result["DXVK_CONFIG"], original["DXVK_CONFIG"])
+            self.assertEqual(result["VKD3D_CONFIG"], original["VKD3D_CONFIG"])
 
     def test_default_and_explicit_disabled_are_unchanged(self):
         for value in (None, "0", "false"):
@@ -53,37 +55,7 @@ class LowMemoryTest(unittest.TestCase):
         self.assertEqual(result["DXVK_HUD"], "0")
         self.assertEqual(original["MANGOHUD"], "1")
 
-    def test_gpu_default_zero_and_invalid_values_preserve_driver_budget(self):
-        for value in (None, "0", "", "-1", "255", "16385", "999999", "oops",
-                      "$(touch /tmp/no)", "100;bad"):
-            with self.subTest(value=value):
-                env = {LOW["MODE"]: "1"}
-                if value is not None:
-                    env[LOW["GPU"]] = value
-                result = LOW["game_environment"](env)
-                self.assertNotIn("DXVK_CONFIG", result)
-                self.assertNotIn("VKD3D_VRAM_SIZE", result)
-                self.assertNotIn("DXVK_CONFIG", env)
 
-    def test_gpu_limits_preserve_dxvk_options_and_off_is_unchanged(self):
-        for value in (None, "0", "1024", "2048", "3072", "256", "16384", "invalid"):
-            for config in ("dxvk.maxFrameRate = 60", "dxvk.maxFrameRate = 60;",
-                           "dxgi.maxDeviceMemory = 4096; dxgi.maxSharedMemory = 4096;"):
-                with self.subTest(value=value, config=config):
-                    env = {LOW["MODE"]: "1", "DXVK_CONFIG": config}
-                    if value is not None:
-                        env[LOW["GPU"]] = value
-                    result = LOW["game_environment"](env)
-                    if value in ("1024", "2048", "3072", "256", "16384"):
-                        self.assertEqual(result["DXVK_CONFIG"], config.rstrip(";") +
-                                         "; dxgi.maxDeviceMemory = " + value + "; dxgi.maxSharedMemory = " + value)
-                    else:
-                        self.assertEqual(result["DXVK_CONFIG"], config)
-                    self.assertEqual(result.get(LOW["GPU"]), value)
-                    self.assertNotIn("dxgi=b", result["WINEDLLOVERRIDES"])
-                    off = dict(env, DROIDDECK_LOW_MEMORY="0")
-                    self.assertIs(LOW["game_environment"](off), off)
-                    self.assertEqual(off["DXVK_CONFIG"], config)
 
     def run_session(self, shared, env=None, session=None, raw=False):
         with tempfile.TemporaryDirectory() as directory:

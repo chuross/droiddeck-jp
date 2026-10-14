@@ -6,7 +6,6 @@
 - [Low Memoryモード](overlay/low-memory/): 端末RAM向けの設定・Steam未使用メモリ回収・Decky停止。
 
 - [ARM64 Proton修正](overlay/proton-ntcontext/): 本家DLLのNULLガード・Low Memory時のFEX検索RAM削減。
-- [VKD3D省メモリ](overlay/vkd3d-low-memory/): Low Memory時の未使用スクラッチバッファ保持を削減。
 - [ログ共有](overlay/log-share/): 実ログを変更せず省メモリの共有snapshotを作成。
 
 
