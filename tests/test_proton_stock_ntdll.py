@@ -25,6 +25,7 @@ class OriginalDllGuardTest(unittest.TestCase):
         with patch.dict(RECIPE["patch"].__globals__, STOCK_SHA256=hashlib.sha256(original).hexdigest()):
             candidate = RECIPE["patch"](original)
             report = RECIPE["verify"](original, candidate)
+            self.assertEqual(report["original_sha256"], hashlib.sha256(original).hexdigest())
             permitted = {i for start, length in report["changed_ranges"] for i in range(start, start + length)}
             self.assertEqual(len(candidate), len(original))
             self.assertTrue(all(i in permitted for i, (a, b) in enumerate(zip(original, candidate)) if a != b))
@@ -62,5 +63,12 @@ class OriginalDllGuardTest(unittest.TestCase):
     def test_inspected_release_binary(self):
         original = Path(os.environ["DROIDDECK_STOCK_NTDLL"]).read_bytes()
         candidate = RECIPE["patch"](original)
-        self.assertEqual(RECIPE["verify"](original, candidate)["patched_sha256"],
-                         "230be42fe184bf28932f84707c42d057560abae512b961f434dd79ce7c30fa59")
+        expected = {
+            "6a185abe76c901c9ae64f9500a952a93665efd1ad19ac0eea3e78790541f21b9":
+                "230be42fe184bf28932f84707c42d057560abae512b961f434dd79ce7c30fa59",
+            "4df3958ca291b682ab6e9f6463ee11465339bcca0eac4917200f5f33a9beb954":
+                "5f1731950f5424ac8fec3755ff978c7aea7749012a7a7efab6b40b99e088ec15",
+        }
+        report = RECIPE["verify"](original, candidate)
+        self.assertEqual(report["original_sha256"], hashlib.sha256(original).hexdigest())
+        self.assertEqual(report["patched_sha256"], expected[report["original_sha256"]])
