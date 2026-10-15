@@ -1,15 +1,15 @@
 {
   "proton_repository": "https://github.com/Droid-Deck/DroidDeck-Proton.git",
-  "proton_branch": "DroidDeck-Proton-11-7.5",
-  "proton_commit": "7065c02ff0bf5373b2ea550aff568a8fff9c80e0",
-  "wine_commit": "847635ca0ec7871fa9a3df80283c20dcdc09d572",
+  "proton_branch": "DroidDeck-Proton-11-9.1",
+  "source_tag": "DroidDeck-Proton-11-9.1",
+  "proton_commit": "bc343c2557bf75df18bda4173c97d5afcf3f7f26",
+  "wine_commit": "e72ecf5d2f2906fe4e690c1be48abd96683e1a07",
   "dxvk_commit": "2c94c5f25cf75c313ef2a55b2e0c9276d67c28d6",
   "vkd3d_commit": "2230755878b01993b4b82d0ac0c0624f3ab4d333",
-  "base_name": "DroidDeck-Proton-11-7.5",
-  "build_name": "DroidDeck-Proton-11-7.5-droiddeck",
+  "base_name": "DroidDeck-Proton-11-9.1",
+  "base_directory": "DroidDeck-Proton 11-9.1",
+  "build_name": "DroidDeck-Proton-11-9.1-droiddeck",
   "sdk_image": "registry.gitlab.steamos.cloud/proton/steamrt4/sdk/arm64-llvm:4.0.20260714.251823-0",
-  "source_tag": "DroidDeck-Proton-11-7.5",
-  "base_archive": "https://github.com/Droid-Deck/DroidDeck-Proton/releases/download/DroidDeck-Proton-11-7.5/DroidDeck-Proton-11-7.5-aarch64.tar.gz",
-  "base_sha256": "e16b08122fe29c16f5940130a3ebbad5d78db5ba4e6f2c626ee084f2088c41bc",
-  "base_directory": "DroidDeck-Proton 11-7.5"
+  "base_sha256": "02bf3a3770fc21710e62f581f1a7875c4c619d6d7ca01c5aa480e4d6fa4a4f3f",
+  "base_archive": "https://github.com/Droid-Deck/DroidDeck-Proton/releases/download/DroidDeck-Proton-11-9.1/DroidDeck-Proton-11-9.1-aarch64.tar.gz"
 }
