@@ -1,0 +1,69 @@
+#!/usr/bin/python3
+"""Reduce Steam UI content generation in memory, without saving Steam preferences."""
+import threading
+import time
+import json
+import os
+
+# The tracked Steam settings store exposes these observable values to both UI
+# modes. Its native SetSetting path persists them; deliberately never call it.
+# Missing/changed fields fail closed. A new Steam process reloads saved settings.
+TEMPLATE = r"""(() => {
+    const keys = __KEYS__;
+    const apply = () => {
+        const store = window.settingsStore;
+        const settings = store?.clientSettings;
+        if (!settings || typeof store.GetClientSetting !== 'function') return 'waiting';
+        if (!keys.every(key => typeof settings[key] === 'boolean')) return 'unsupported';
+        for (const key of keys) {
+            if (settings[key] !== true) settings[key] = true;
+        }
+        return keys.every(key => settings[key] === true) ? 'active' : 'unsupported';
+    };
+    const result = apply();
+    if (result === 'active' && !window.__droiddeckUiLiteTimer) {
+        // A native settings refresh can replace values. Only reapply changes;
+        // no GC, renderer killing, reloads, or repeated Python/CDP polling.
+        window.__droiddeckUiLiteTimer = window.setInterval(apply, 30000);
+    }
+    return result;
+})()"""
+
+
+def expression(small=False):
+    keys = ['library_low_perf_mode', 'library_low_bandwidth_mode',
+            'library_disable_community_content']
+    if small:
+        keys.append('small_mode')
+    return TEMPLATE.replace('__KEYS__', json.dumps(keys))
+
+
+SCRIPT = expression()
+
+
+def install(agent_dir, evaluate, log, timeout=90, small=False):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            status = evaluate(agent_dir, expression(small), timeout=2).get("value")
+            if status == "active":
+                log("steam-ui-lite: session-only library effects/media/community content reduced")
+                if small:
+                    log("steam-ui-lite: desktop UI uses the compact game list for this session")
+                return True
+            if status == "unsupported":
+                log("steam-ui-lite: unsupported settings store; unchanged")
+                return False
+        except Exception:
+            pass  # Steam/CEF may not have started yet; never expose account data.
+        time.sleep(2)
+    log("steam-ui-lite: settings store not ready; unchanged")
+    return False
+
+
+def start(agent_dir, evaluate, log):
+    thread = threading.Thread(target=install, args=(agent_dir, evaluate, log),
+                              kwargs={"small": os.environ.get("BL_STEAM_UI") == "desktop"},
+                              daemon=True, name="steam-ui-lite")
+    thread.start()
+    return thread
