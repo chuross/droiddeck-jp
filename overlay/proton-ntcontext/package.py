@@ -206,19 +206,6 @@ def import_layout(tree):
     return importer
 
 
-def install_ram_policy(tree):
-    proton = tree / "proton"
-    source = proton.read_text()
-    ram_anchor = '            self.env.setdefault("FEX_DISKCACHE", "1")\n'
-    if source.count(ram_anchor) != 1:
-        raise ValueError("original Proton FEX startup changed")
-    source = source.replace(ram_anchor, ram_anchor +
-        '            from droiddeck_ram import configure_ram\n'
-        '            configure_ram(self.env)\n')
-    write_preserving_mode(proton, source.encode())
-    shutil.copy2(ROOT / "droiddeck_ram.py", tree / "droiddeck_ram.py")
-
-
 def package(task, manager, lock_path=None):
     lock = json.loads((lock_path or ROOT / "build.lock.json").read_text())
     if lock["proton_repository"] != "https://github.com/Droid-Deck/DroidDeck-Proton.git":
@@ -270,7 +257,6 @@ def package(task, manager, lock_path=None):
                 "ntdll": original_ntdll_hash, "dxgi": original_dxvk_hash, "vkd3d": original_vkd3d_hash}):
         raise ValueError("stock/patched DLL runtime verification is missing or stale")
     write_preserving_mode(ntdll, rebuilt.read_bytes())
-    install_ram_policy(tree)
     if sha256(dxvk) != original_dxvk_hash or sha256(vkd3d) != original_vkd3d_hash:
         raise ValueError("default graphics DLLs differ from the original release")
     template = (task / "proton/compatibilitytool.vdf.template").read_text()
@@ -281,9 +267,8 @@ def package(task, manager, lock_path=None):
     if not sdk_digests:
         raise ValueError("SDK image digest is missing")
     metadata = dict(lock, manager_commit=manager, sdk_digests=sdk_digests,
-                    ram_policy=json.loads((task / "results/ram-source-audit.json").read_text()),
                     dll_profile="patched", replaced_dlls=["ntdll"],
-                    features=["ntcontext-null-fix", "fex-lookup-ram-retention"],
+                    features=["ntcontext-null-fix"],
                     patches=["ntgetcontext-null.patch"],
                     runtime_verification=smoke,
                     ntdll_stock_delta=ntdll_delta,
@@ -309,7 +294,7 @@ def package(task, manager, lock_path=None):
     # Include exact patches, build inputs and source locations with the binary.
     source_info = tree / "droiddeck-source"
     source_info.mkdir()
-    for name in ("build.lock.json", "apply.py", "build.sh", "build-inside.sh", "build_config.py", "prepare_upstream.py", "runtime_smoke.py", "stock_ntdll.py", "droiddeck_ram.py", "runtime-probe.c", "package.py",
+    for name in ("build.lock.json", "apply.py", "build.sh", "build-inside.sh", "build_config.py", "prepare_upstream.py", "runtime_smoke.py", "stock_ntdll.py", "runtime-probe.c", "package.py",
                  "ntgetcontext-null.patch"):
         shutil.copy2(lock_path if name == "build.lock.json" and lock_path else ROOT / name, source_info / name)
     shutil.copy2(task / "proton/LICENSE.proton", tree / "LICENSE.proton")
@@ -336,6 +321,7 @@ if __name__ == "__main__":
     parser.add_argument("--lock", type=Path)
     args = parser.parse_args()
     package(args.task.resolve(), args.manager, args.lock)
+
 
 
 

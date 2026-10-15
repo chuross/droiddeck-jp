@@ -1,5 +1,0 @@
-<?xml version="1.0" encoding="utf-8"?>
-<resources>
-    <string name="quick_share_unavailable">DroidDeckからQuick Shareの共有先を検出できませんでした。Quick Shareが無効とは限りません。</string>
-    <string name="quick_share_launch_failed">Quick Shareの起動に失敗しました（%1$s）。エラーはログに記録しました。</string>
-</resources>

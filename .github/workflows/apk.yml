@@ -9,10 +9,6 @@ on:
       - 'overlay/offline-mode/**'
       - 'overlay/proton-logs/**'
       - 'overlay/proton-import/**'
-      - 'overlay/low-memory/**'
-      - 'overlay/log-share/**'
-      - 'overlay/quick-share/**'
-      - 'overlay/ci-stability/**'
       - 'upstream.lock.json'
       - '.github/workflows/apk.yml'
   workflow_dispatch:
@@ -165,5 +161,6 @@ jobs:
         if: always()
         working-directory: ${{ github.workspace }}
         run: rm -rf source
+
 
 

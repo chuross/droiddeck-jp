@@ -9,7 +9,6 @@ import subprocess
 from package import (base_tree, original_ntdll, original_dxvk, original_vkd3d,
                      pe_interface, sha256, write_preserving_mode)
 from stock_ntdll import patch as patch_stock_ntdll, verify as verify_stock_ntdll
-from droiddeck_ram import configure_ram
 
 
 def windows_path(path):
@@ -35,9 +34,7 @@ def run_probe(task, tree, probe, targets, phase):
                LD_LIBRARY_PATH=":".join(library_paths) + ":" + os.environ.get("LD_LIBRARY_PATH", ""),
                WINEDLLOVERRIDES="dxgi,d3d12core=n;winemenubuilder.exe=d",
                FEX_DISKCACHE="0", FEX_APP_CONFIG=str(config),
-               DROIDDECK_SESSION_LOW_MEMORY="1" if phase == "patched" else "0",
                FEX_APP_CONFIG_LOCATION=str(tree / "files/share/fex-emu"))
-    configure_ram(env)
     log = task / ("results/runtime-" + phase + ".log")
     try:
         with log.open("w") as output:
@@ -123,3 +120,4 @@ if __name__ == "__main__":
     parser.add_argument("--guard-preflight", action="store_true")
     args = parser.parse_args()
     (guard_preflight if args.guard_preflight else verify)(args.task.resolve())
+

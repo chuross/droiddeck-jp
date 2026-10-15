@@ -159,15 +159,7 @@ class PrepareTest(unittest.TestCase):
         staging.write_text('        val files = arrayOf(\n        )\n')
         (self.source / "app/build.gradle").write_text('applicationId "com.droiddeck.launcher"\n')
         with patch.object(fonts, "bundle_fonts"), \
-             patch.object(imports, "check"), patch.object(imports, "apply"), \
-             patch.object(builder.PATCHES["low-memory"], "check"), \
-             patch.object(builder.PATCHES["low-memory"], "apply"), \
-             patch.object(builder.PATCHES["log-share"], "check"), \
-             patch.object(builder.PATCHES["log-share"], "apply"), \
-             patch.object(builder.PATCHES["quick-share"], "check"), \
-             patch.object(builder.PATCHES["quick-share"], "apply"), \
-             patch.object(builder.PATCHES["ci-stability"], "check"), \
-             patch.object(builder.PATCHES["ci-stability"], "apply"):
+             patch.object(imports, "check"), patch.object(imports, "apply"):
             builder.overlay(self.source)
         for name, text in preserved.items():
             self.assertEqual((target / name).read_text(), text)
@@ -192,6 +184,7 @@ class PrepareTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
 
 
 

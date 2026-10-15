@@ -244,10 +244,6 @@ class DroidDeckPackageTest(unittest.TestCase):
         for name in ("wine", "dxvk", "vkd3d-proton"):
             (results / (name + "-patches.diff")).write_text("patch")
         (self.task / "sdk-digests.json").write_text('["sdk@sha256:digest"]')
-        (results / "ram-source-audit.json").write_text(json.dumps({
-            "method": "minimum-per-thread-FEX-lookup-table", "fex_commit": "14c92681f4d62cf84d901460e0358de09c8847a7",
-            "normal_maximum_lookup_bytes_per_thread": 16777216, "low_memory_lookup_bytes_per_thread": 131072,
-            "translated_code_cache": "preserved", "live_game_allocations": "unchanged"}))
         (self.task / "proton").mkdir()
         (self.task / "proton/LICENSE.proton").write_text("Valve license")
         (self.task / "dist").mkdir()
@@ -297,7 +293,7 @@ class DroidDeckPackageTest(unittest.TestCase):
         self.assertEqual(metadata["vkd3d_core_architecture"], "ARM64X")
         self.assertEqual(metadata["dll_profile"], "patched")
         self.assertIn("ntcontext-null-fix", metadata["features"])
-        self.assertEqual(metadata["features"], ["ntcontext-null-fix", "fex-lookup-ram-retention"])
+        self.assertEqual(metadata["features"], ["ntcontext-null-fix"])
         self.assertEqual(metadata["replaced_dlls"], ["ntdll"])
         for original, installed in (("original_ntdll_sha256", "rebuilt_ntdll_sha256"),
                                     ("original_dxvk_dxgi_sha256", "rebuilt_dxvk_dxgi_sha256"),
@@ -311,14 +307,8 @@ class DroidDeckPackageTest(unittest.TestCase):
             self.assertTrue((packaged / metadata[key]).is_file())
         namespace = {"os": __import__("os")}
         exec((packaged / "proton").read_text(), namespace)
-        ram_module = __import__("types").ModuleType("droiddeck_ram")
-        exec((packaged / "droiddeck_ram.py").read_text(), ram_module.__dict__)
-        with patch.dict(__import__("sys").modules, droiddeck_ram=ram_module):
-            for mode in ("0", "1"):
-                session = namespace["Session"]()
-                session.env = {"DROIDDECK_SESSION_LOW_MEMORY": mode}
-                session.setup()
-                self.assertEqual("FEX_DYNAMICL1CACHEINCREASECOUNTHEURISTIC" in session.env, mode == "1")
+        self.assertEqual((packaged / "proton").read_bytes(), (self.tree / "proton").read_bytes())
+        self.assertFalse((packaged / "droiddeck_ram.py").exists())
         selector = namespace["Proton"]()
         selector.lib_dir = str(packaged / "files/lib") + "/"
         selector.host_pe_arch = "aarch64-windows"
@@ -515,11 +505,8 @@ class DroidDeckReleaseTest(unittest.TestCase):
             dict(plan["lock"], manager_commit="e" * 40, dll_profile="patched",
                  replaced_dlls=["ntdll"],
                  ntdll_stock_delta=delta,
-                 ram_policy={"method": "minimum-per-thread-FEX-lookup-table", "fex_commit": "14c92681f4d62cf84d901460e0358de09c8847a7",
-                             "normal_maximum_lookup_bytes_per_thread": 16777216, "low_memory_lookup_bytes_per_thread": 131072,
-                             "translated_code_cache": "preserved", "live_game_allocations": "unchanged"},
                  default_graphics_sha256={"dxgi": "b" * 64, "vkd3d": "c" * 64},
-                 features=["ntcontext-null-fix", "fex-lookup-ram-retention"],
+                 features=["ntcontext-null-fix"],
                  patches=["ntgetcontext-null.patch"],
                  original_ntdll_sha256="a" * 64, rebuilt_ntdll_sha256="d" * 64,
                  original_dxvk_dxgi_sha256="b" * 64, rebuilt_dxvk_dxgi_sha256="b" * 64,
@@ -538,7 +525,7 @@ class DroidDeckReleaseTest(unittest.TestCase):
     def test_unverified_or_changed_dlls_cannot_be_published(self):
         plan = self.plan()
         for change in ({"dll_profile": "stock"}, {"replaced_dlls": ["ntdll", "dxgi"]},
-                       {"features": ["ntcontext-null-fix"]},
+                       {"features": []},
                        {"rebuilt_ntdll_sha256": "0" * 64}, {"runtime_verification": {}},
                        {"original_dxvk_dxgi_sha256": ""}, {"rebuilt_vkd3d_core_sha256": "f" * 64}, {"upstream_graphics_patches": {}}):
             with self.subTest(change=change), tempfile.TemporaryDirectory() as temporary:
@@ -679,6 +666,7 @@ class DroidDeckReleaseTest(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
 
 
 

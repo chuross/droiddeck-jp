@@ -18,11 +18,6 @@ test "$(git -C "$task_root/proton/wine" rev-parse HEAD)" = "$(read_lock wine_com
 test "$(git -C "$task_root/proton/dxvk" rev-parse HEAD)" = "$(read_lock dxvk_commit)"
 test "$(git -C "$task_root/proton/vkd3d-proton" rev-parse HEAD)" = "$(read_lock vkd3d_commit)"
 mkdir -p "$task_root/results"
-git -C "$task_root/proton" submodule update --init --depth=1 FEX
-python3 "$manager_root/overlay/proton-ntcontext/droiddeck_ram.py" "$task_root/proton/FEX" \
-    --output "$task_root/results/ram-source-audit.json"
-DROIDDECK_FEX_SOURCE="$task_root/proton/FEX" \
-    python3 -m unittest discover -s "$manager_root/tests" -p 'test_proton_ram.py' -v
 python3 "$manager_root/overlay/proton-ntcontext/prepare_upstream.py" "$task_root/proton" \
     --output "$task_root/results/upstream-patches.json"
 python3 "$manager_root/overlay/proton-ntcontext/apply.py" --wine-source "$task_root/proton/wine"
@@ -42,4 +37,5 @@ tar --exclude=.git -cJf "$task_root/dist/$(read_lock build_name)-wine-source.tar
 python3 "$manager_root/overlay/proton-ntcontext/package.py" "$task_root" --manager "$manager_commit" --lock "$lock"
 cd "$task_root/dist"
 sha256sum *.tar.* > SHA256SUMS
+
 
