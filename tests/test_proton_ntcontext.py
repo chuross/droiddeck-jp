@@ -214,6 +214,8 @@ class DroidDeckPackageTest(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.task = Path(self.temp.name)
         self.lock = json.loads((ROOT / "build.lock.json").read_text())
+        self.lock.update(base_directory="DroidDeck-Proton 11-7.5",
+                         build_name="DroidDeck-Proton-11-7.5-droiddeck")
         self.lock_path = self.task / "build.lock.json"
         self.lock_path.write_text(json.dumps(self.lock))
         self.tree = self.task / "base" / self.lock["base_directory"]
