@@ -2,6 +2,8 @@ name: Build and publish DroidDeck Patch nightly APK
 
 on:
   workflow_dispatch:
+  schedule:
+    - cron: '17 1 * * *' # Daily at 10:17 JST (01:17 UTC)
 
 permissions:
   contents: read
