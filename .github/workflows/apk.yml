@@ -9,8 +9,6 @@ on:
       - 'overlay/offline-mode/**'
       - 'overlay/proton-logs/**'
       - 'overlay/proton-import/**'
-      - 'overlay/background-memory/**'
-      - 'overlay/turnip-process-heap-usage/**'
       - 'upstream.lock.json'
       - '.github/workflows/apk.yml'
   workflow_dispatch:
@@ -66,9 +64,6 @@ jobs:
           python3 -m py_compile build/DroidDeck/tools/linuxfs/overlay/usr/local/bin/droiddeck-game-env
           python3 -m unittest discover -s tests -v
           python3 build/DroidDeck/tools/tests/test_game_environment.py
-      - name: Bundle temporary Turnip heap usage fix
-        uses: ./source/overlay/turnip-process-heap-usage
-        if: steps.plan.outputs.build == 'true'
       - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4
         if: steps.plan.outputs.build == 'true'
         with:
@@ -145,9 +140,7 @@ jobs:
       - name: Native components and release APK build
         if: steps.plan.outputs.build == 'true'
         working-directory: source/build/DroidDeck
-        run: |
-          bash tools/build_local.sh
-          python3 ../../overlay/turnip-process-heap-usage/embed.py --verify-apk app/build/outputs/apk/release/app-release.apk
+        run: bash tools/build_local.sh
       - name: Prepare APK and local provenance
         if: steps.plan.outputs.build == 'true'
         run: |

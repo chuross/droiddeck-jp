@@ -159,8 +159,7 @@ class PrepareTest(unittest.TestCase):
         staging.write_text('        val files = arrayOf(\n        )\n')
         (self.source / "app/build.gradle").write_text('applicationId "com.droiddeck.launcher"\n')
         with patch.object(fonts, "bundle_fonts"), \
-             patch.object(imports, "check"), patch.object(imports, "apply"), \
-             patch.dict(builder.PATCHES, {"japanese-fonts": fonts, "proton-logs": logs, "proton-import": imports}, clear=True):
+             patch.object(imports, "check"), patch.object(imports, "apply"):
             builder.overlay(self.source)
         for name, text in preserved.items():
             self.assertEqual((target / name).read_text(), text)
