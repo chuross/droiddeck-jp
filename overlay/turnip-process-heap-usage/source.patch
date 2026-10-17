@@ -1,0 +1,33 @@
+diff --git a/app/src/main/java/com/droiddeck/launcher/gpu/TurnipReleases.kt b/app/src/main/java/com/droiddeck/launcher/gpu/TurnipReleases.kt
+index acc94192..7e0d7ee6 100644
+--- a/app/src/main/java/com/droiddeck/launcher/gpu/TurnipReleases.kt
++++ b/app/src/main/java/com/droiddeck/launcher/gpu/TurnipReleases.kt
+@@ -43,7 +43,7 @@ object TurnipReleases {
+     /** What an asset is: a Linux build or not, the menu label, and the pair it belongs to. */
+     private class Kind(val linux: Boolean, val label: String, val pair: String, val bundle: Boolean = false)
+ 
+-    private class Source(val label: String, val repo: String, val classify: (name: String, tag: String) -> Kind?)
++    private class Source(val label: String, val repo: String, val cachePrefix: String = "", val classify: (name: String, tag: String) -> Kind?)
+ 
+     private val SOURCES = listOf(
+         // Turnip-<tag>[-variant][-Linux|-Wayland].zip; -Wayland is for a path this app does not have.
+@@ -73,6 +73,10 @@ object TurnipReleases {
+         },
+         // DD-Turnip-v<ver>.zip: DroidDeck's own all-in-one build, both halves in one zip, published
+         // to Drivers-CI (releases only). Every release is offered, not just the newest, each its own pair.
++        Source("DroidDeck Patch", "chuross/droiddeck-patch", cachePrefix = "DroidDeck-Patch-") { name, tag ->
++            if (!Regex("""^DD-Turnip-v\d+\.\d+\.\d+\.zip$""").matches(name)) return@Source null
++            Kind(false, "Android + Linux · all Adreno", DriverPairs.ddTurnip(tag), bundle = true)
++        },
+         Source("DroidDeck", "Droid-Deck/Drivers-CI") { name, tag ->
+             if (!Regex("""^DD-Turnip-v\d+\.\d+\.\d+\.zip$""").matches(name)) return@Source null
+             Kind(false, "Android + Linux · all Adreno", DriverPairs.ddTurnip(tag), bundle = true)
+@@ -117,7 +121,7 @@ object TurnipReleases {
+                         val sha = Hashes.githubSha256(a.optString("digest")) ?: continue
+                         // Newest first: the first release carrying a variant is the one offered.
+                         if (!seen.add(if (kind.bundle) kind.pair else "$linux|$label")) continue
+-                        assets.put(JSONObject().put("source", src.label).put("tag", tag).put("name", name)
++                        assets.put(JSONObject().put("source", src.label).put("tag", tag).put("name", src.cachePrefix + name)
+                             .put("url", a.getString("browser_download_url")).put("size", a.optLong("size"))
+                             .put("linux", linux).put("label", label).put("sha256", sha).put("pair", kind.pair)
+                             .put("bundle", kind.bundle))

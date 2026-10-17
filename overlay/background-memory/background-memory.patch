@@ -1,0 +1,143 @@
+diff --git a/app/src/main/java/com/droiddeck/launcher/MainActivity.kt b/app/src/main/java/com/droiddeck/launcher/MainActivity.kt
+index 6d3cf99b..a63674b3 100644
+--- a/app/src/main/java/com/droiddeck/launcher/MainActivity.kt
++++ b/app/src/main/java/com/droiddeck/launcher/MainActivity.kt
+@@ -521,6 +521,7 @@ class MainActivity : ComponentActivity() {
+ 
+     override fun onCreate(savedInstanceState: Bundle?) {
+         super.onCreate(savedInstanceState)
++        com.droiddeck.launcher.core.BackgroundAppLimit.recoverAsync(this)
+         readGameIntent(intent)
+         gameSyncFolder = GameFileSync.folder(this)
+         displayManager = getSystemService(DISPLAY_SERVICE) as DisplayManager
+diff --git a/app/src/main/java/com/droiddeck/launcher/core/WirelessAdbFix.kt b/app/src/main/java/com/droiddeck/launcher/core/WirelessAdbFix.kt
+index 573aea35..59425257 100644
+--- a/app/src/main/java/com/droiddeck/launcher/core/WirelessAdbFix.kt
++++ b/app/src/main/java/com/droiddeck/launcher/core/WirelessAdbFix.kt
+@@ -186,25 +186,46 @@ object WirelessAdbFix {
+ 
+     /** Tries the app's saved pairing without asking for a new pairing code. */
+     fun setUsingSavedPairing(context: Context, enabled: Boolean) {
++        withSavedPairing(context) { app, host, port -> setChildProcessLimit(app, host, port, enabled) }
++    }
++
++    fun hasSavedPairing(context: Context): Boolean = savedConnection(context.applicationContext) != null
++
++    /** Blocking shell command using the existing saved identity and port discovery. */
++    fun shell(context: Context, command: String): String {
++        var output = ""
++        withSavedPairing(context) { app, host, port ->
++            loadOrCreateIdentity(app)
++            Kadb.create(host, port).use { adb ->
++                val result = adb.shell(command)
++                check(result.exitCode == 0) { result.allOutput.ifBlank { app.getString(R.string.adbfix_command_failed, result.exitCode) } }
++                output = result.output
++            }
++            saveConnection(app, host, port)
++        }
++        return output
++    }
++
++    private fun withSavedPairing(context: Context, action: (Context, String, Int) -> Unit) {
+         val appContext = context.applicationContext
+         val saved = savedConnection(appContext)
+             ?: error(appContext.getString(R.string.adbfix_no_pairing))
+         val cachedPort = saved.port
+         if (cachedPort != null) {
+             val cachedResult = runCatching {
+-                setChildProcessLimit(appContext, saved.host, cachedPort, enabled)
++                action(appContext, saved.host, cachedPort)
+             }
+             if (cachedResult.isSuccess) return
+             val discoveredPort = findConnectPort(appContext, saved.host)
+             if (discoveredPort != null && discoveredPort != cachedPort) {
+-                setChildProcessLimit(appContext, saved.host, discoveredPort, enabled)
++                action(appContext, saved.host, discoveredPort)
+             } else {
+                 cachedResult.getOrThrow()
+             }
+         } else {
+             val discoveredPort = findConnectPort(appContext, saved.host)
+                 ?: error(appContext.getString(R.string.adbfix_enter_address))
+-            setChildProcessLimit(appContext, saved.host, discoveredPort, enabled)
++            action(appContext, saved.host, discoveredPort)
+         }
+     }
+ }
+diff --git a/app/src/main/java/com/droiddeck/launcher/session/SessionService.kt b/app/src/main/java/com/droiddeck/launcher/session/SessionService.kt
+index 2f606dcd..7804db9b 100644
+--- a/app/src/main/java/com/droiddeck/launcher/session/SessionService.kt
++++ b/app/src/main/java/com/droiddeck/launcher/session/SessionService.kt
+@@ -259,6 +259,7 @@ class SessionService : Service() {
+         // This session's number, claimed here and not when its process starts: the session it
+         // replaces can report its own exit in the gap between the two, and that exit must not
+         // be taken as this one's.
++        val memoryPreparation = com.droiddeck.launcher.core.BackgroundAppLimit.applyAsync(this)
+         val gen = ++sessionGen
+         cancelQueuedSteamGame(clearMailbox = false)
+         clearSteamGameMailbox()
+@@ -268,6 +269,7 @@ class SessionService : Service() {
+             // never ran) would hold the rootfs, the GPU and Steam's lock: nothing of ours should
+             // be alive between sessions outside this process.
+             OrphanReaper.reap("session starting")
++            memoryPreparation.get()
+-            runSession(gen)
++            if (gen == sessionGen && SessionState.running) runSession(gen)
+         }, "session-start").start()
+         // The activity or the notification stops us; the system must not resurrect a session whose
+@@ -1544,6 +1546,7 @@ class SessionService : Service() {
+         SessionState.stopRequested = false
+         SessionEvents.record("guest.exited", mapOf("status" to status))
+         GpuClockPin.stop(this)
++        com.droiddeck.launcher.core.BackgroundAppLimit.restoreAsync(applicationContext)
+         SessionEvents.transition(SessionPhase.STOPPING, "session.stopping", mapOf("status" to status))
+         suspendOperationPending = false
+         launchWatcher?.stopWatching()
+diff --git a/app/src/main/java/com/droiddeck/launcher/ui/FrontEndSetup.kt b/app/src/main/java/com/droiddeck/launcher/ui/FrontEndSetup.kt
+index 613c96d4..af6c9b95 100644
+--- a/app/src/main/java/com/droiddeck/launcher/ui/FrontEndSetup.kt
++++ b/app/src/main/java/com/droiddeck/launcher/ui/FrontEndSetup.kt
+@@ -399,6 +399,7 @@ internal fun SetupPanel(
+                         } else { look(); device(); art() }
+                     }
+                     3 -> {
++                        BackgroundMemorySettings(host)
+                         SettingsGroup(stringResource(R.string.setup_tab_diagnostics)) {
+                             ToggleRow(host, "logs", stringResource(R.string.setup_logs), stringResource(R.string.setup_logs_hint), s.logsEnabled) { a.onLogs() }
+                             ToggleRow(host, "agent-commands", stringResource(R.string.setup_agent_commands), null, s.agentCommands) { a.onAgentCommands() }
+diff --git a/app/src/main/res/values-ja/strings.xml b/app/src/main/res/values-ja/strings.xml
+index a788642f..34e40b4e 100644
+--- a/app/src/main/res/values-ja/strings.xml
++++ b/app/src/main/res/values-ja/strings.xml
+@@ -2088,4 +2088,13 @@
+     <plurals name="games_already_n">
+         <item quantity="other">%1$d 本はすでにゲームにあります</item>
+     </plurals>
++    <string name="patch_bg_group">バックグラウンドメモリ</string>
++    <string name="patch_bg_clear">セッション開始前にキャッシュ済みアプリを閉じる</string>
++    <string name="patch_bg_clear_hint">Wireless debuggingでキャッシュ済みアプリを閉じてから開始します。</string>
++    <string name="patch_bg_limit">セッション中のバックグラウンドアプリ数</string>
++    <string name="patch_bg_limit_hint">終了時に元のAndroid設定へ復元します。</string>
++    <string name="patch_bg_unpaired">有効化するには子プロセス制限の修復からWireless debuggingをペアリングしてください。</string>
++    <string name="patch_bg_four">最大4</string>
++    <string name="patch_bg_one">最大1</string>
++    <string name="patch_bg_none">なし</string>
+ </resources>
+diff --git a/app/src/main/res/values/strings.xml b/app/src/main/res/values/strings.xml
+index ce6d2a68..7efb0fab 100644
+--- a/app/src/main/res/values/strings.xml
++++ b/app/src/main/res/values/strings.xml
+@@ -2287,4 +2287,13 @@
+     <string name="desktop_size">Size on disk</string>
+     <string name="desktop_uninstall_title">Uninstall the desktop?</string>
+     <string name="desktop_all_systems">All</string>
++    <string name="patch_bg_group">Background memory</string>
++    <string name="patch_bg_clear">Close cached apps before a session</string>
++    <string name="patch_bg_clear_hint">Closes cached apps over Wireless debugging before starting the session.</string>
++    <string name="patch_bg_limit">Background apps during a session</string>
++    <string name="patch_bg_limit_hint">Restores the previous Android setting when the session ends.</string>
++    <string name="patch_bg_unpaired">Pair Wireless debugging using the child-process repair to enable this.</string>
++    <string name="patch_bg_four">At most 4</string>
++    <string name="patch_bg_one">At most 1</string>
++    <string name="patch_bg_none">None</string>
+ </resources>

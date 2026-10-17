@@ -9,6 +9,8 @@ on:
       - 'overlay/offline-mode/**'
       - 'overlay/proton-logs/**'
       - 'overlay/proton-import/**'
+      - 'overlay/background-memory/**'
+      - 'overlay/turnip-process-heap-usage/**'
       - 'upstream.lock.json'
       - '.github/workflows/apk.yml'
   workflow_dispatch:
