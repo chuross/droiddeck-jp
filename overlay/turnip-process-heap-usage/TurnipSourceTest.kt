@@ -16,11 +16,7 @@ import org.json.JSONObject
 class TurnipSourceTest {
     private fun bundle(source: String, version: String): TurnipReleases.Asset {
         val tag = "DD-Turnip-v$version"
-        val registry = TurnipReleases::class.java.getDeclaredField("SOURCES").apply { isAccessible = true }
-        val sources = registry.get(TurnipReleases) as List<*>
-        fun field(entry: Any, name: String) = entry.javaClass.getDeclaredField(name).apply { isAccessible = true }.get(entry) as String
-        val registered = sources.filterNotNull().single { field(it, "label") == source }
-        val file = field(registered, "cachePrefix") + "$tag.zip"
+        val file = if (source == "DroidDeck Patch") "DroidDeck-Patch-$tag.zip" else "$tag.zip"
         return TurnipReleases.Asset(source, tag, file, "https://example/$source/$tag", 100,
             false, "Android + Linux", "0".repeat(64), DriverPairs.ddTurnip(tag), bundle = true)
     }
@@ -82,4 +78,39 @@ class TurnipSourceTest {
         cache(context, patched, official)
         assertEquals("newer-official", TurnipReleases.installedId(context, official) { true })
     }
+    @Test fun bundledMetadataUsesNormalPairsAndContentSpecificCacheKey() {
+        val json = JSONObject().put("tag", "DD-Turnip-v0.2.0").put("sha256", "a".repeat(64)).put("size", 100)
+        val patched = BundledTurnip.asset(json)
+        val official = bundle("DroidDeck", "0.2.0")
+        assertTrue(patched.url.startsWith("apk://"))
+        assertSame(patched, pairs(patched, official).single().bundle)
+        assertNotEquals(official.name, patched.name)
+        assertNotEquals(patched.name, BundledTurnip.asset(json.put("sha256", "b".repeat(64))).name)
+    }
+    @Test(expected = IllegalArgumentException::class)
+    fun invalidBundledTagIsRejected() {
+        BundledTurnip.asset(JSONObject().put("tag", "../escape").put("sha256", "a".repeat(64)).put("size", 1))
+    }
+
+    @Test fun apkBundledDriverDownloadsOfflineAndUsesExistingBundleImporter() {
+        val context = RuntimeEnvironment.getApplication()
+        val asset = BundledTurnip.merge(context, null)?.assets?.single()
+        org.junit.Assume.assumeNotNull(asset)
+        val bundled = asset!!
+        var completed = false
+        val zip = TurnipReleases.download(context, bundled) { completed = it == 100 }
+        try {
+            assertTrue(completed)
+            assertEquals(bundled.sha256, com.droiddeck.launcher.core.Hashes.sha256(zip))
+            val installed = DriverBundle.install(context, android.net.Uri.fromFile(zip))
+            try {
+                assertEquals(bundled.tag.removePrefix("DD-Turnip-v"), installed.version)
+                assertTrue(TurnipDriver(context).isInstalled(installed.androidId))
+                assertTrue(LinuxVulkanDriverManager(context).isInstalled(installed.linuxId))
+                TurnipReleases.recordDownload(context, bundled, installed.id)
+                assertEquals(installed.id, TurnipReleases.installedId(context, bundled) { DriverBundle.get(context, it) != null })
+            } finally { DriverBundle.remove(context, installed) }
+        } finally { zip.delete() }
+    }
+
 }

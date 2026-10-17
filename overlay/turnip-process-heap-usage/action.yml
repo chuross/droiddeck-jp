@@ -1,0 +1,36 @@
+name: Bundle temporary Turnip heap usage fix
+description: Build exact official sources with the temporary patch and stage them inside the APK
+runs:
+  using: composite
+  steps:
+    - name: Resolve official recipe and detect equivalent upstream fixes
+      id: plan
+      shell: bash
+      working-directory: ${{ github.action_path }}/../..
+      run: python3 overlay/turnip-process-heap-usage/driver.py plan
+    - name: Host driver build tools
+      if: steps.plan.outputs.build == 'true'
+      shell: bash
+      run: |
+        sudo apt-get update -qq
+        sudo apt-get install -y --no-install-recommends ninja-build flex bison glslang-tools pkg-config python3-pip binutils gcc-aarch64-linux-gnu g++-aarch64-linux-gnu binutils-aarch64-linux-gnu libwayland-dev
+        python3 -m pip install 'meson>=1.5' mako pyyaml packaging
+    - name: Android NDK from exact official recipe
+      if: steps.plan.outputs.build == 'true'
+      id: ndk
+      uses: nttld/setup-ndk@afb4c9964b521afb97c864b7d40b11e6911bd410
+      with:
+        ndk-version: ${{ steps.plan.outputs.ndk_version }}
+        add-to-path: false
+        local-cache: true
+    - name: Build patched Android and Linux drivers
+      if: steps.plan.outputs.build == 'true'
+      shell: bash
+      working-directory: ${{ github.action_path }}/../..
+      env:
+        ANDROID_NDK_HOME: ${{ steps.ndk.outputs.ndk-path }}
+      run: bash overlay/turnip-process-heap-usage/build.sh
+    - name: Embed verified drivers and corresponding source in APK assets
+      shell: bash
+      working-directory: ${{ github.action_path }}/../..
+      run: python3 overlay/turnip-process-heap-usage/embed.py --destination build/DroidDeck/app/src/main/assets/turnip-process-heap-usage

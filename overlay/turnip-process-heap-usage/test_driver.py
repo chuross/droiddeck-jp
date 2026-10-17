@@ -19,7 +19,9 @@ ROOT = HERE.parents[1]
 sys.path.insert(0, str(HERE))
 import driver
 import process_heap_usage as heap
-import release
+import re
+import validate_bundle as release
+import embed
 sys.path.remove(str(HERE))
 spec = importlib.util.spec_from_file_location('turnip_source_apply', HERE / 'apply.py')
 source = importlib.util.module_from_spec(spec); spec.loader.exec_module(source)
@@ -89,7 +91,7 @@ class TurnipTest(unittest.TestCase):
         (recipe/'patches/scripts').mkdir(parents=True)
         (recipe/'patches/series.json').write_text('[]\n')
         (recipe/'scripts').mkdir()
-        (recipe/'scripts/package_bundle.py').write_text('CI_URL = "https://github.com/Droid-Deck/Drivers-CI/releases/tag"\n')
+        (recipe/'scripts/package_bundle.py').write_text('CI_URL = "https://github.com/Droid-Deck/Drivers-CI/releases/tag"\n# published with these drivers at {CI_URL}/{tag}\n')
         git(recipe,'add','.')
         git(recipe,'-c','user.name=Test','-c','user.email=test@example.invalid','commit','-qm','official recipe')
         return recipe
@@ -131,45 +133,38 @@ class TurnipTest(unittest.TestCase):
         with patch.object(driver,'run',side_effect=run), patch.object(driver,'equivalent',side_effect=[True,False]):
             with self.assertRaisesRegex(RuntimeError,'disagree'): driver.inspect_recipe(recipe,mesa)
 
-    def test_source_registration_only_and_removal_keeps_official(self):
+    def test_bundled_hooks_remove_cleanly_and_keep_official_source(self):
         fixture_from_patch(source.PATCH, self.work); git(self.work,'init','-q')
         path = self.work/source.OWNED_PATHS[0]; before=path.read_text()
         source.apply(self.work); after=path.read_text()
-        self.assertEqual(after.count('"Droid-Deck/Drivers-CI"'),1)
-        self.assertLess(after.index('"chuross/droiddeck-patch"'),after.index('"Droid-Deck/Drivers-CI"'))
-        self.assertEqual(after.count('DriverPairs.ddTurnip(tag)'),before.count('DriverPairs.ddTurnip(tag)')+1)
-        self.assertIn('cachePrefix = "DroidDeck-Patch-"', after)
-        self.assertIn('src.cachePrefix + name', after)
+        self.assertIn('BundledTurnip.merge(context',after)
+        self.assertIn('BundledTurnip.download(context',after)
+        self.assertNotIn('chuross/droiddeck-patch',after)
         git(self.work,'apply','--reverse',str(source.PATCH))
         self.assertEqual(path.read_text(),before)
-        self.assertNotIn('chuross/droiddeck-patch',path.read_text())
+        for patchfile in source.PATCHES:
+            self.assertNotIn('-        Source("DroidDeck", "Droid-Deck/Drivers-CI")',patchfile.read_text())
 
-    def test_release_is_separate_never_latest_and_never_deletes_assets(self):
-        plan = driver.provenance(official()); plan.update(identity='x', patched_recipe_commit='c'*40)
-        assets = [self.work/(plan['tag']+s) for s in ('.zip','.zip.sha256','-source.tar.xz')]
-        with patch.object(release,'validate',return_value=(plan,assets)), \
-             patch.object(release.subprocess,'run',return_value=subprocess.CompletedProcess([],1,'','release not found')), \
-             patch.object(release,'run') as run:
-            release.publish('chuross/droiddeck-patch','d'*40,self.work)
-        commands=[c.args for c in run.call_args_list]
-        self.assertEqual([c[2] for c in commands],['create','upload','edit'])
-        self.assertIn('--latest=false',commands[0]); self.assertIn('--latest=false',commands[-1])
-        self.assertTrue(all(plan['tag'] in c for c in commands))
-        self.assertFalse(any('delete-asset' in c or '--latest' in c for c in commands))
-
-    def test_driver_workflow_removal_does_not_leave_apk_or_proton_dependency(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            workflows = Path(temporary) / 'workflows'
-            shutil.copytree(ROOT / '.github/workflows', workflows)
-            (workflows / 'turnip.yml').unlink()
-            for name in ('apk.yml', 'nightly.yml', 'proton.yml'):
-                self.assertEqual((workflows / name).read_bytes(), (ROOT / '.github/workflows' / name).read_bytes())
-        for name in ('apk.yml','nightly.yml','proton.yml'):
+    def test_driver_build_cannot_create_component_release(self):
+        self.assertFalse(hasattr(release,'publish'))
+        self.assertFalse((ROOT/'.github/workflows/turnip.yml').exists())
+        action=(HERE/'action.yml').read_text()
+        self.assertIn('using: composite',action)
+        self.assertNotIn('contents: write',action)
+        self.assertNotIn('gh release',action)
+        self.assertNotIn('release.py',action)
+        self.assertIn('embed.py',action)
+        for name in ('apk.yml','nightly.yml'):
             text=(ROOT/'.github/workflows'/name).read_text()
+            self.assertNotIn('needs: turnip',text)
             self.assertNotIn('turnip.yml',text)
-            self.assertNotIn('needs: driver',text)
-            self.assertNotIn('overlay/turnip-process-heap-usage/build.sh',text)
-        self.assertNotIn('background-memory',(ROOT/'.github/workflows/turnip.yml').read_text())
+            self.assertIn('uses: ./source/overlay/turnip-process-heap-usage',text)
+            # Removing the dedicated action registration, validation hook and path trigger leaves
+            # no job dependency or configuration that needs the removed overlay/workflow.
+            removed = re.sub(r"      - name: Bundle temporary Turnip heap usage fix\n        uses: ./source/overlay/turnip-process-heap-usage\n(?:        if: steps.plan.outputs.build == 'true'\n)?", '', text)
+            removed = '\n'.join(line for line in removed.split('\n') if 'turnip-process-heap-usage' not in line)
+            self.assertNotIn('turnip', removed.lower())
+        self.assertNotIn('turnip.yml',(ROOT/'.github/workflows/proton.yml').read_text())
         for path in HERE.glob('*'):
             if path.is_file() and path.name != Path(__file__).name:
                 self.assertNotIn('background-memory',path.read_text())
@@ -247,17 +242,21 @@ class BuildPlanTest(unittest.TestCase):
             self.assertEqual(plan['official_repository'],'Droid-Deck/Drivers-CI')
             prepare.assert_not_called()
 
-    def test_matching_complete_release_skips_but_partial_release_retries(self):
+    def test_build_does_not_depend_on_a_component_release(self):
+        with tempfile.TemporaryDirectory() as temporary, \
+             patch.object(driver,'releases',return_value=[official()]) as releases, \
+             patch.object(driver,'official_ndk',return_value='r26d'), patch.object(driver,'checkout'), patch.object(driver,'inspect_recipe',side_effect=[False,True]), \
+             patch.object(driver,'prepare_recipe',return_value='c'*40):
+            plan=driver.plan_build('chuross/droiddeck-patch',Path(temporary)/'plan')
+            self.assertTrue(plan['build'])
+            releases.assert_called_once_with('Droid-Deck/Drivers-CI')
+
+    def test_upstream_fixed_plan_embeds_no_temporary_driver(self):
         with tempfile.TemporaryDirectory() as temporary:
-            upstream=official(); identity=driver.source_identity(driver.provenance(upstream))
-            existing=official(); existing['body']=f'<!-- turnip-source: {identity} -->'
-            for index, complete in enumerate((True,False)):
-                if not complete: existing['assets'].pop()
-                with patch.object(driver,'releases',side_effect=[[upstream],[existing]]), \
-                     patch.object(driver,'official_ndk',return_value='r26d'), patch.object(driver,'checkout'), patch.object(driver,'inspect_recipe',side_effect=[False,True]), \
-                     patch.object(driver,'prepare_recipe',return_value='c'*40):
-                    plan=driver.plan_build('chuross/droiddeck-patch',Path(temporary)/str(index))
-                    self.assertEqual(plan['build'],not complete)
+            work=Path(temporary)
+            (work/'plan.json').write_text(json.dumps(dict(build=False,status='overlay unnecessary: equivalent upstream fix detected')))
+            embed.stage(work,work/'assets')
+            self.assertEqual([p.name for p in (work/'assets').iterdir()],['upstream-fixed.json'])
 
 
 class ReleaseValidationTest(unittest.TestCase):
@@ -289,7 +288,23 @@ class ReleaseValidationTest(unittest.TestCase):
             checksum.write_text(hashlib.sha256(bundle.read_bytes()).hexdigest()+'  '+bundle.name+'\n')
             verified,assets=release.validate(work)
             self.assertEqual(verified,plan);self.assertEqual(len(assets),3)
+            destination=work/'apk-assets'
+            embed.stage(work,destination)
+            self.assertEqual((destination/'bundle.zip').read_bytes(),bundle.read_bytes())
+            self.assertEqual((destination/(tag+'-source.tar.xz')).read_bytes(),assets[2].read_bytes())
+            metadata=json.loads((destination/'bundle.json').read_text())
+            self.assertEqual(metadata['sha256'],hashlib.sha256(bundle.read_bytes()).hexdigest())
+            self.assertEqual(metadata['size'],bundle.stat().st_size)
+            apk=work/'app.apk'
+            with zipfile.ZipFile(apk,'w') as packed:
+                for path in destination.iterdir():
+                    packed.write(path,'assets/turnip-process-heap-usage/'+path.name)
+            embed.verify_apk(apk)
+            with zipfile.ZipFile(apk,'a') as packed:
+                packed.writestr('assets/turnip-process-heap-usage/bundle.json',json.dumps(dict(metadata,sha256='0'*64)))
+            with self.assertRaisesRegex(RuntimeError,'checksum'):embed.verify_apk(apk)
             checksum.write_text('tampered')
             with self.assertRaisesRegex(RuntimeError,'checksum'):release.validate(work)
+            with self.assertRaisesRegex(RuntimeError,'checksum'):embed.stage(work,work/'tampered-assets')
             plan['tag']='0.4.0';(work/'plan.json').write_text(json.dumps(plan))
             with self.assertRaisesRegex(RuntimeError,'DD-Turnip'):release.validate(work)

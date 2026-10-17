@@ -1,33 +1,23 @@
 diff --git a/app/src/main/java/com/droiddeck/launcher/gpu/TurnipReleases.kt b/app/src/main/java/com/droiddeck/launcher/gpu/TurnipReleases.kt
-index 0cf3225c..0d3e9c73 100644
+index 0cf3225..2f9661f 100644
 --- a/app/src/main/java/com/droiddeck/launcher/gpu/TurnipReleases.kt
 +++ b/app/src/main/java/com/droiddeck/launcher/gpu/TurnipReleases.kt
-@@ -26,7 +26,7 @@ object TurnipReleases {
+@@ -58,8 +58,8 @@ object TurnipReleases {
+     )
  
-     private class Kind(val linux: Boolean, val label: String, val pair: String, val bundle: Boolean = false)
+     fun cached(context: Context): Check? {
+-        val raw = prefs(context).getString(KEY_RELEASE, null) ?: return null
+-        return runCatching { parse(JSONObject(raw)) }.getOrNull()
++        val raw = prefs(context).getString(KEY_RELEASE, null)
++        return BundledTurnip.merge(context, raw?.let { runCatching { parse(JSONObject(it)) }.getOrNull() })
+     }
  
--    private class Source(val label: String, val repo: String, val classify: (name: String, tag: String) -> Kind?)
-+    private class Source(val label: String, val repo: String, val cachePrefix: String = "", val classify: (name: String, tag: String) -> Kind?)
+     fun refresh(context: Context): Check {
+@@ -178,6 +178,7 @@ object TurnipReleases {
+     }
  
-     private val SOURCES = listOf(
-         Source("Banners-Turnip", "The412Banner/Banners-Turnip") { name, tag ->
-@@ -51,6 +51,10 @@ object TurnipReleases {
-             val gpus = if (m.groupValues[3] == "Axxx") "all Adreno" else m.groupValues[3]
-             Kind(m.groupValues[1].isNotEmpty(), "$gpus · $flavour", "wn-" + m.groupValues[2])
-         },
-+        Source("DroidDeck Patch", "chuross/droiddeck-patch", cachePrefix = "DroidDeck-Patch-") { name, tag ->
-+            if (!Regex("""^DD-Turnip-v\d+\.\d+\.\d+\.zip$""").matches(name)) return@Source null
-+            Kind(false, "Android + Linux · all Adreno", DriverPairs.ddTurnip(tag), bundle = true)
-+        },
-         Source("DroidDeck", "Droid-Deck/Drivers-CI") { name, tag ->
-             if (!Regex("""^DD-Turnip-v\d+\.\d+\.\d+\.zip$""").matches(name)) return@Source null
-             Kind(false, "Android + Linux · all Adreno", DriverPairs.ddTurnip(tag), bundle = true)
-@@ -87,7 +91,7 @@ object TurnipReleases {
-                         val label = kind.label
-                         val sha = Hashes.githubSha256(a.optString("digest")) ?: continue
-                         if (!seen.add(if (kind.bundle) kind.pair else "$linux|$label")) continue
--                        assets.put(JSONObject().put("source", src.label).put("tag", tag).put("name", name)
-+                        assets.put(JSONObject().put("source", src.label).put("tag", tag).put("name", src.cachePrefix + name)
-                             .put("url", a.getString("browser_download_url")).put("size", a.optLong("size"))
-                             .put("linux", linux).put("label", label).put("sha256", sha).put("pair", kind.pair)
-                             .put("bundle", kind.bundle))
+     fun download(context: Context, asset: Asset, progress: (Int) -> Unit): File {
++        BundledTurnip.download(context, asset, progress)?.let { return it }
+         if (asset.sha256.isEmpty()) throw IOException(context.getString(R.string.turnip_list_predates_checksums))
+         val target = File(context.cacheDir, asset.name)
+         val ok = Downloader.downloadFile(asset.url, target, true, asset.sha256) { f -> progress(if (f < 0) -1 else (f * 100).toInt()) }

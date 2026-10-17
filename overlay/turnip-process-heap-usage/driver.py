@@ -112,9 +112,11 @@ def prepare_recipe(recipe, plan):
     packaging = recipe / "scripts/package_bundle.py"
     text = packaging.read_text()
     old = "https://github.com/Droid-Deck/Drivers-CI/releases/tag"
-    if text.count(old) != 1:
+    notice = "published with these drivers at {CI_URL}/{tag}"
+    if text.count(old) != 1 or text.count(notice) != 1:
         raise RuntimeError("Source notice upstream drift")
-    packaging.write_text(text.replace(old, "https://github.com/chuross/droiddeck-patch/releases/tag"))
+    packaging.write_text(text.replace(old, "https://github.com/chuross/droiddeck-patch/releases").replace(
+        notice, "included in the APK assets/turnip-process-heap-usage/ directory; APK releases: {CI_URL}"))
     series = recipe / "patches/series.json"
     entries = json.loads(series.read_text())
     entries.append({"file": "scripts/process_heap_usage.py", "targets": ["android", "linux"],
@@ -152,12 +154,6 @@ def plan_build(repository, work):
         if not inspect_recipe(recipe, mesa):
             raise RuntimeError("Patched recipe lacks process-wide usage")
     plan["build"] = not unnecessary
-    existing = next((r for r in releases(repository) if r["tag_name"] == plan["tag"]), None)
-    if existing and not existing.get("draft"):
-        required = {plan["tag"] + s for s in (".zip", ".zip.sha256", "-source.tar.xz")}
-        if (f'<!-- turnip-source: {plan["identity"]} -->' in existing.get("body", "")
-                and required <= {a["name"] for a in existing["assets"]}):
-            plan["build"] = False
     (work / "plan.json").write_text(json.dumps(plan, indent=2) + "\n")
     if os.environ.get("GITHUB_OUTPUT"):
         with open(os.environ["GITHUB_OUTPUT"], "a") as output:
