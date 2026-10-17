@@ -164,9 +164,7 @@ diff --git a/app/src/main/java/com/droiddeck/launcher/ui/ComponentsPage.kt b/app
 index 32dcaa16..de02bba0 100644
 --- a/app/src/main/java/com/droiddeck/launcher/ui/ComponentsPage.kt
 +++ b/app/src/main/java/com/droiddeck/launcher/ui/ComponentsPage.kt
-@@ -611,6 +611,13 @@ fun ComponentsPage(
-                 }
-             }
+@@ -613,4 +613,11 @@ fun ComponentsPage(
              PROTON_TAB -> {
 +                GetLine(
 +                    stringResource(R.string.proton_import_title), stringResource(R.string.proton_import_note),
